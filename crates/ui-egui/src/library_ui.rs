@@ -34,6 +34,7 @@ pub enum DetailTab {
     Info,
     Notes,
     Highlights,
+    Chats,
 }
 
 /// Work done off the interface thread.
@@ -155,7 +156,7 @@ fn spawn(f: impl FnOnce() + Send + 'static) {
 }
 
 impl LibraryUi {
-    fn ensure_loaded(&mut self) {
+    pub(crate) fn ensure_loaded(&mut self) {
         if self.lib.is_none() {
             let (lib, err) = Library::open(library_dir());
             if let Some(e) = err {
@@ -235,6 +236,7 @@ impl PdfCraftApp {
         self.library.detail = match tab {
             "notes" => DetailTab::Notes,
             "highlights" => DetailTab::Highlights,
+            "chats" => DetailTab::Chats,
             _ => DetailTab::Info,
         };
     }
@@ -1255,6 +1257,7 @@ fn details(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
 
     // Tabs.
     let n_marks = app.library.marks.get(&id).map(Vec::len);
+    let n_chats = app.ask_saved_for(&paper.path).len();
     ui.horizontal(|ui| {
         for (tab, label) in [
             (DetailTab::Info, "Info".to_owned()),
@@ -1266,6 +1269,7 @@ fn details(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                     _ => "Highlights".to_owned(),
                 },
             ),
+            (DetailTab::Chats, if n_chats > 0 { format!("Chats ({n_chats})") } else { "Chats".to_owned() }),
         ] {
             let on = app.library.detail == tab;
             let text = RichText::new(label).font(if on { theme::semibold(13.0) } else { theme::regular(13.0) }).color(if on {
@@ -1288,6 +1292,7 @@ fn details(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         DetailTab::Info => info_tab(app, ui, t, id),
         DetailTab::Notes => notes_tab(app, ui, t, id),
         DetailTab::Highlights => highlights_tab(app, ui, t, id),
+        DetailTab::Chats => chats_tab(app, ui, t, &paper.path),
     }
 }
 
@@ -1666,6 +1671,62 @@ fn highlights_tab(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, id: Pape
     });
     if let Some(page) = jump {
         app.library_open_paper(id, Some(page));
+    }
+}
+
+/// The paper's saved Ask conversations: open one to continue it, export it, or delete it.
+fn chats_tab(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, path: &str) {
+    let convs = app.ask_saved_for(path);
+    if convs.is_empty() {
+        ui.add_space(20.0);
+        ui.label(
+            RichText::new("No conversations yet. Open the PDF and click the sparkles button (Ask this paper); every conversation is kept here.")
+                .color(t.text_faint),
+        );
+        return;
+    }
+    let mut resume = None;
+    let mut export = None;
+    let mut delete = None;
+    egui::ScrollArea::vertical().id_salt("library_chats").auto_shrink([false, false]).show(ui, |ui| {
+        for c in &convs {
+            egui::Frame::NONE.fill(t.panel).corner_radius(6).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let questions = c.turns.iter().filter(|x| x.role == pdfcraft_library::ask::Role::User).count();
+                ui.label(
+                    RichText::new(format!("{} · {} question{}", c.updated.get(..10).unwrap_or(""), questions, if questions == 1 { "" } else { "s" }))
+                        .font(theme::regular(11.0))
+                        .color(t.text_faint),
+                );
+                ui.label(RichText::new(c.first_question()).font(theme::regular(13.0)).color(t.text));
+                ui.horizontal(|ui| {
+                    if ui.small_button("Continue").on_hover_text("Open the PDF with this conversation").clicked() {
+                        resume = Some(c.clone());
+                    }
+                    if ui.small_button("Export").on_hover_text("Save as a Markdown file").clicked() {
+                        export = Some(c.clone());
+                    }
+                    if ui.small_button("Copy").clicked() {
+                        let reference = app.library.paper_for(path).and_then(|id| app.library.lib.as_ref()?.get(id)).map(cite::apa);
+                        ui.ctx().copy_text(c.to_markdown(reference.as_deref()));
+                        app.notify("Copied");
+                    }
+                    if ui.small_button("Delete").clicked() {
+                        delete = Some(c.id);
+                    }
+                });
+            });
+            ui.add_space(6.0);
+        }
+    });
+    if let Some(c) = resume {
+        app.ask_resume(c);
+    }
+    if let Some(c) = export {
+        app.ask_export(&c);
+    }
+    if let Some(id) = delete {
+        app.ask_delete(id);
     }
 }
 

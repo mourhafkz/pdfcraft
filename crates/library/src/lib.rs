@@ -9,6 +9,7 @@
 //! here panics.
 
 pub mod ask;
+pub mod chats;
 pub mod cite;
 #[cfg(feature = "fetch")]
 pub mod fetch;

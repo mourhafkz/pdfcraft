@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use egui::{Align, Color32, Layout, RichText, Stroke, vec2};
 use pdfcraft_library::ask::{self, Role, Source, Turn};
+use pdfcraft_library::chats::{self, Conversation};
 
 use crate::library_marks;
 use crate::theme::{self, Tokens};
@@ -20,8 +21,10 @@ use crate::{PdfCraftApp, icons};
 #[derive(Default)]
 pub struct AskUi {
     pub open: bool,
-    /// Conversations by file path.
-    chats: HashMap<String, Vec<Turn>>,
+    /// The conversation showing for each file.
+    chats: HashMap<String, Conversation>,
+    /// Every saved conversation (read from the library's `chats/` folder on first use).
+    saved: Option<Vec<Conversation>>,
     input: String,
     /// The file a question is being answered for.
     pending: Option<String>,
@@ -170,9 +173,14 @@ impl PdfCraftApp {
         let include = settings.ask_include_notes && paper.is_some();
         let notes = if include { paper.and_then(|id| lib?.get(id)).map(|p| p.notes.clone()).unwrap_or_default() } else { String::new() };
         let known_marks = if include { paper.and_then(|id| self.library.marks.get(&id).cloned()) } else { None };
-        let history = self.library.ask.chats.get(&path).cloned().unwrap_or_default();
+        self.ask_current(&path);
+        let history = self.library.ask.chats.get(&path).map(|c| c.turns.clone()).unwrap_or_default();
         let cached_pages = self.library.ask.pages.get(&path).cloned();
-        self.library.ask.chats.entry(path.clone()).or_default().push(Turn::user(&question));
+        let conv = self.library.ask.chats.entry(path.clone()).or_insert_with(|| Conversation::new(&path, &title));
+        if conv.title.is_empty() {
+            conv.title.clone_from(&title);
+        }
+        conv.turns.push(Turn::user(&question));
         self.library.ask.pending = Some(path.clone());
         self.library.ask.error = None;
         self.library.ask.scroll_to_end = true;
@@ -209,10 +217,15 @@ impl PdfCraftApp {
             self.library.ask.pending = None;
         }
         match a.result {
-            Ok(turn) => self.library.ask.chats.entry(a.path).or_default().push(turn),
+            Ok(turn) => {
+                if let Some(conv) = self.library.ask.chats.get_mut(&a.path) {
+                    conv.turns.push(turn);
+                    self.ask_save(&a.path);
+                }
+            }
             Err(e) => {
                 // Take the unanswered question back into the box so it can be sent again.
-                if let Some(chat) = self.library.ask.chats.get_mut(&a.path)
+                if let Some(chat) = self.library.ask.chats.get_mut(&a.path).map(|c| &mut c.turns)
                     && chat.last().is_some_and(|t| t.role == Role::User)
                     && let Some(q) = chat.pop()
                 {
@@ -225,6 +238,89 @@ impl PdfCraftApp {
             }
         }
         self.library.ask.scroll_to_end = true;
+    }
+
+    /// Every saved conversation, newest first (read once).
+    pub(crate) fn ask_saved(&mut self) -> &[Conversation] {
+        if self.library.ask.saved.is_none() {
+            let dir = self.library.lib.as_ref().map(|l| l.dir().to_path_buf());
+            self.library.ask.saved = Some(dir.map(|d| chats::load_all(&d)).unwrap_or_default());
+        }
+        self.library.ask.saved.as_deref().unwrap_or(&[])
+    }
+
+    /// The saved conversations about `path`, newest first.
+    pub(crate) fn ask_saved_for(&mut self, path: &str) -> Vec<Conversation> {
+        self.ask_saved().iter().filter(|c| crate::same_file(&c.path, path)).cloned().collect()
+    }
+
+    /// Show the latest saved conversation for `path` when none is showing yet.
+    fn ask_current(&mut self, path: &str) {
+        if !self.library.ask.chats.contains_key(path)
+            && let Some(latest) = self.ask_saved_for(path).into_iter().next()
+        {
+            self.library.ask.chats.insert(path.to_owned(), latest);
+        }
+    }
+
+    /// Write the conversation showing for `path` to the library.
+    fn ask_save(&mut self, path: &str) {
+        self.library.ensure_loaded();
+        let Some(dir) = self.library.lib.as_ref().map(|l| l.dir().to_path_buf()) else { return };
+        let _ = self.ask_saved();
+        let Some(conv) = self.library.ask.chats.get_mut(path) else { return };
+        if let Err(e) = chats::save(&dir, conv) {
+            self.library.ask.error = Some(format!("Couldn't save the conversation: {e}"));
+            return;
+        }
+        let copy = conv.clone();
+        if let Some(saved) = self.library.ask.saved.as_mut() {
+            saved.retain(|c| c.id != copy.id);
+            saved.insert(0, copy);
+        }
+    }
+
+    /// Open a saved conversation: its paper in a tab and the conversation in the Ask window.
+    pub(crate) fn ask_resume(&mut self, conv: Conversation) {
+        let path = conv.path.clone();
+        if !std::path::Path::new(&path).is_file() {
+            self.notify("The PDF of this conversation isn't where it was.");
+            return;
+        }
+        self.library.ask.chats.insert(path.clone(), conv);
+        self.library.ask.open = true;
+        let _ = self.open_path(&path);
+        if let Some(i) = self.tab_showing(&path) {
+            self.active = Some(i);
+            self.library.focused = false;
+        }
+    }
+
+    /// Delete a saved conversation (and stop showing it).
+    pub(crate) fn ask_delete(&mut self, id: u64) {
+        if let Some(dir) = self.library.lib.as_ref().map(|l| l.dir().to_path_buf())
+            && let Err(e) = chats::delete(&dir, id)
+        {
+            self.notify(format!("Couldn't delete the conversation: {e}"));
+            return;
+        }
+        if let Some(saved) = self.library.ask.saved.as_mut() {
+            saved.retain(|c| c.id != id);
+        }
+        self.library.ask.chats.retain(|_, c| c.id != id);
+    }
+
+    /// Save a conversation as a Markdown file the user picks.
+    pub(crate) fn ask_export(&mut self, conv: &Conversation) {
+        let reference = self.library.paper_for(&conv.path).and_then(|id| self.library.lib.as_ref()?.get(id)).map(pdfcraft_library::cite::apa);
+        let text = conv.to_markdown(reference.as_deref());
+        let stem: String = conv.title.chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-').take(60).collect();
+        let name = format!("{} – conversation.md", if stem.trim().is_empty() { "Paper" } else { stem.trim() });
+        let dialog = rfd::AsyncFileDialog::new().set_file_name(name).add_filter("Markdown", &["md"]);
+        self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, path| match std::fs::write(&path, text) {
+            Ok(()) => app.notify(format!("Saved {}", path.display())),
+            Err(e) => app.notify(format!("Couldn't save: {e}")),
+        });
     }
 
     /// Go to a cited page of the open document.
@@ -273,6 +369,11 @@ pub fn window(app: &mut PdfCraftApp, ctx: &egui::Context) {
 
 fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, path: &str) {
     let in_library = app.library.paper_for(path);
+    app.ask_current(path);
+    let history = app.ask_saved_for(path);
+    let showing = app.library.ask.chats.get(path).cloned();
+    let mut export = None;
+    let mut resume = None;
     // Settings row.
     let mut model_changed = false;
     ui.horizontal(|ui| {
@@ -292,12 +393,40 @@ fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, path: &str) {
             if icons::button(ui, "settings", 22.0, app.library.ask.show_key, "API key").clicked() {
                 app.library.ask.show_key = !app.library.ask.show_key;
             }
-            if icons::button(ui, "plus", 22.0, false, "New conversation").clicked() {
-                app.library.ask.chats.remove(path);
+            if icons::button(ui, "plus", 22.0, false, "New conversation (the current one stays saved)").clicked() {
+                app.library.ask.chats.insert(path.to_owned(), Conversation::new(path, ""));
                 app.library.ask.error = None;
+            }
+            let has_turns = showing.as_ref().is_some_and(|c| !c.turns.is_empty());
+            if ui
+                .add_enabled(has_turns, egui::Button::new(RichText::new("Export").font(theme::regular(12.0))))
+                .on_hover_text("Save this conversation as a Markdown file")
+                .clicked()
+            {
+                export = showing.clone();
+            }
+            if !history.is_empty() {
+                ui.menu_button(RichText::new(format!("History ({})", history.len())).font(theme::regular(12.0)), |ui| {
+                    for c in &history {
+                        let current = showing.as_ref().is_some_and(|s| s.id == c.id);
+                        let q = c.first_question();
+                        let q = if q.chars().count() > 50 { format!("{}…", q.chars().take(50).collect::<String>()) } else { q };
+                        let label = format!("{}  {}", c.updated.get(..10).unwrap_or(""), q);
+                        if ui.selectable_label(current, label).clicked() {
+                            resume = Some(c.clone());
+                            ui.close();
+                        }
+                    }
+                });
             }
         });
     });
+    if let Some(c) = export {
+        app.ask_export(&c);
+    }
+    if let Some(c) = resume {
+        app.library.ask.chats.insert(path.to_owned(), c);
+    }
     if model_changed {
         app.library.mark_settings_changed();
     }
@@ -326,7 +455,7 @@ fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, path: &str) {
     ui.separator();
 
     // Conversation.
-    let turns = app.library.ask.chats.get(path).cloned().unwrap_or_default();
+    let turns = app.library.ask.chats.get(path).map(|c| c.turns.clone()).unwrap_or_default();
     let pending = app.library.ask.pending.as_deref() == Some(path);
     let mut go_to = None;
     let mut ask_now = None;
@@ -449,45 +578,104 @@ fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, path: &str) {
     let _ = Stroke::NONE;
 }
 
+/// A piece of an answer to draw: text (bold or not), a line break, or a citation.
+#[derive(Debug, Clone, PartialEq)]
+enum Piece<'a> {
+    Text { text: String, bold: bool },
+    Break,
+    Cite(&'a pdfcraft_library::ask::Citation),
+}
+
+/// Light Markdown for answers: `**bold**`, `- ` / `* ` bullets (as •), `#` headings (bold), and
+/// line breaks. Bold can span citation boundaries, so its state carries across segments.
+fn pieces(turn: &Turn) -> Vec<Piece<'_>> {
+    let mut out = Vec::new();
+    let mut bold = false;
+    let mut line_start = true;
+    for seg in &turn.segments {
+        let mut lines = seg.text.split('\n').peekable();
+        while let Some(line) = lines.next() {
+            let mut rest = line;
+            let mut heading = false;
+            if line_start {
+                let trimmed = rest.trim_start();
+                if let Some(r) = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")) {
+                    let indent = rest.len() - trimmed.len();
+                    out.push(Piece::Text { text: format!("{}• ", " ".repeat(indent)), bold: false });
+                    rest = r;
+                } else if trimmed.starts_with('#') {
+                    rest = trimmed.trim_start_matches('#').trim_start();
+                    heading = true;
+                }
+            }
+            for (k, part) in rest.split("**").enumerate() {
+                if k > 0 {
+                    bold = !bold;
+                }
+                if !part.is_empty() {
+                    out.push(Piece::Text { text: part.to_owned(), bold: bold || heading });
+                }
+            }
+            if !rest.is_empty() {
+                line_start = false;
+            }
+            if lines.peek().is_some() {
+                out.push(Piece::Break);
+                line_start = true;
+                // An unclosed ** never runs past the end of its line.
+                bold = false;
+            }
+        }
+        let mut seen: Vec<String> = Vec::new();
+        for c in &seg.citations {
+            let key = match c.source {
+                Source::Page(p) => format!("p{p}"),
+                Source::Notes => "notes".into(),
+            };
+            if !seen.contains(&key) {
+                seen.push(key);
+                out.push(Piece::Cite(c));
+            }
+        }
+    }
+    out
+}
+
 /// An answer with clickable page citations after the sentences that use them.
 fn answer(ui: &mut egui::Ui, t: &Tokens, turn: &Turn, go_to: &mut Option<usize>) {
     egui::Frame::NONE.fill(t.panel).corner_radius(10).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
-            for seg in &turn.segments {
-                // Line breaks inside a wrapped row: break the row at each one.
-                let mut parts = seg.text.split('\n').peekable();
-                while let Some(part) = parts.next() {
-                    if !part.is_empty() {
-                        ui.label(RichText::new(part).font(theme::regular(13.0)).color(t.text));
+            for piece in pieces(turn) {
+                match piece {
+                    Piece::Text { text, bold } => {
+                        let font = if bold { theme::semibold(13.0) } else { theme::regular(13.0) };
+                        ui.label(RichText::new(text).font(font).color(t.text));
                     }
-                    if parts.peek().is_some() {
-                        ui.end_row();
-                    }
-                }
-                let mut seen: Vec<String> = Vec::new();
-                for c in &seg.citations {
-                    let (label, page) = match c.source {
-                        Source::Page(p) => (format!("p.{}", p + 1), Some(p)),
-                        Source::Notes => ("your notes".to_owned(), None),
-                    };
-                    if seen.contains(&label) {
-                        continue;
-                    }
-                    seen.push(label.clone());
-                    ui.add_space(3.0);
-                    let chip = egui::Button::new(RichText::new(label).font(theme::medium(11.0)).color(t.accent))
-                        .fill(t.accent_soft)
-                        .corner_radius(8)
-                        .small();
-                    let quote =
-                        if c.quote.chars().count() > 300 { format!("{}…", c.quote.chars().take(300).collect::<String>()) } else { c.quote.clone() };
-                    let resp = ui.add(chip).on_hover_text(format!("“{quote}”"));
-                    if resp.clicked()
-                        && let Some(p) = page
-                    {
-                        *go_to = Some(p);
+                    Piece::Break => ui.end_row(),
+                    Piece::Cite(c) => {
+                        let (label, page) = match c.source {
+                            Source::Page(p) => (format!("p.{}", p + 1), Some(p)),
+                            Source::Notes => ("your notes".to_owned(), None),
+                        };
+                        ui.add_space(3.0);
+                        let chip = egui::Button::new(RichText::new(label).font(theme::medium(11.0)).color(t.accent))
+                            .fill(t.accent_soft)
+                            .corner_radius(8)
+                            .small();
+                        let quote = if c.quote.chars().count() > 300 {
+                            format!("{}…", c.quote.chars().take(300).collect::<String>())
+                        } else {
+                            c.quote.clone()
+                        };
+                        let resp = ui.add(chip).on_hover_text(format!("“{quote}”"));
+                        if resp.clicked()
+                            && let Some(p) = page
+                        {
+                            *go_to = Some(p);
+                        }
+                        ui.add_space(3.0);
                     }
                 }
             }
@@ -537,6 +725,38 @@ It is kept in your macOS Keychain.",
 mod tests {
     use super::*;
     use pdfcraft_library::cite::HighlightNote;
+
+    #[test]
+    fn light_markdown() {
+        use pdfcraft_library::ask::{Citation, Segment};
+        let cite = Citation { source: Source::Page(2), quote: "q".into() };
+        let turn = Turn {
+            role: Role::Assistant,
+            segments: vec![
+                Segment { text: "## Findings\n- **No reliable".into(), citations: vec![] },
+                Segment { text: " predictor.** None".into(), citations: vec![cite.clone(), cite.clone()] },
+                Segment { text: "\n* plain **open".into(), citations: vec![] },
+            ],
+        };
+        let p = pieces(&turn);
+        let text = |s: &str, bold: bool| Piece::Text { text: s.into(), bold };
+        assert_eq!(
+            p,
+            vec![
+                text("Findings", true),
+                Piece::Break,
+                text("• ", false),
+                text("No reliable", true),
+                text(" predictor.", true),
+                text(" None", false),
+                Piece::Cite(&turn.segments[1].citations[0]),
+                Piece::Break,
+                text("• ", false),
+                text("plain ", false),
+                text("open", true),
+            ]
+        );
+    }
 
     #[test]
     fn reader_notes_list_highlights_then_notes() {

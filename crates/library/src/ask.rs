@@ -7,6 +7,7 @@
 //! finding" and cite the reader's own note. Only the request is built and the answer parsed here;
 //! the HTTPS call is in `fetch` behind the `fetch` feature.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{Error, Result};
@@ -31,14 +32,16 @@ general knowledge clearly separate from what the paper says. Answer in the langu
 Be concise and precise; use short paragraphs or bullet points.";
 
 /// Who said a turn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Role {
     User,
     Assistant,
 }
 
 /// Where a cited passage is.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Source {
     /// A page of the paper (0-based).
     Page(usize),
@@ -47,21 +50,21 @@ pub enum Source {
 }
 
 /// A cited passage.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Citation {
     pub source: Source,
     pub quote: String,
 }
 
 /// A run of answer text and the passages it cites.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Segment {
     pub text: String,
     pub citations: Vec<Citation>,
 }
 
 /// One turn of a conversation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Turn {
     pub role: Role,
     pub segments: Vec<Segment>,
