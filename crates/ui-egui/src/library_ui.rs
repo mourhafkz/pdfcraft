@@ -40,6 +40,7 @@ pub enum DetailTab {
 /// Work done off the interface thread.
 pub(crate) enum Job {
     Asked(crate::ask_ui::Answer),
+    Studied(crate::study_ui::StudyResult),
     Imported { id: PaperId, result: Result<Box<library_marks::Scanned>, String>, lookup: Option<Result<Metadata, String>> },
     Looked { id: PaperId, result: Result<Metadata, String>, overwrite: bool },
     Marks { id: PaperId, result: Result<Vec<Mark>, String> },
@@ -93,6 +94,8 @@ pub struct LibraryUi {
     watch_scanned: bool,
     /// The Ask this paper window.
     pub ask: crate::ask_ui::AskUi,
+    /// The Study window (language learning).
+    pub study: crate::study_ui::StudyUi,
 }
 
 impl Default for LibraryUi {
@@ -127,6 +130,7 @@ impl Default for LibraryUi {
             notes_window: false,
             watch_scanned: false,
             ask: Default::default(),
+            study: Default::default(),
         }
     }
 }
@@ -416,6 +420,10 @@ impl PdfCraftApp {
                 self.ask_answered(answer);
                 return;
             }
+            Job::Studied(result) => {
+                self.study_done(result);
+                return;
+            }
             other => other,
         };
         let Some(lib) = self.library.lib.as_mut() else { return };
@@ -501,7 +509,7 @@ impl PdfCraftApp {
                     }
                 }
             }
-            Job::Asked(_) => {}
+            Job::Asked(_) | Job::Studied(_) => {}
             Job::Hits { generation, hits } => {
                 if generation == self.library.fulltext_generation {
                     self.library.fulltext_hits = hits;

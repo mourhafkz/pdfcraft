@@ -118,6 +118,8 @@ mod pickers;
 pub mod prepare;
 mod print_ui;
 mod signature_drag;
+#[cfg(not(target_arch = "wasm32"))]
+mod study_ui;
 pub mod units;
 mod web_print;
 mod word_count_ui;
@@ -2930,6 +2932,12 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             ("ask", _) => self.library.ask.open = value != "closed",
             #[cfg(not(target_arch = "wasm32"))]
+            ("study", _) => self.library.study.open = value != "closed",
+            #[cfg(not(target_arch = "wasm32"))]
+            ("study_sheet", _) => self.study_show_file(value)?,
+            #[cfg(not(target_arch = "wasm32"))]
+            ("study_tab", _) => self.study_show_tab(value),
+            #[cfg(not(target_arch = "wasm32"))]
             ("library_add", _) => self.library_add_paths(value.split(',').map(std::path::PathBuf::from).collect()),
             ("scroll_speed", _) => {
                 self.scroll_speed = scroll_speed::ScrollSpeed::parse(value).ok_or("scroll_speed must be slow, normal, or fast")?;
@@ -3771,6 +3779,7 @@ impl eframe::App for PdfCraftApp {
             self.library_frame();
             library_ui::notes_window(self, &ctx);
             ask_ui::window(self, &ctx);
+            study_ui::window(self, &ctx);
         }
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);

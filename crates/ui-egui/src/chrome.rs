@@ -78,8 +78,8 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 library_buttons(app, ui, button, library_showing);
                 // Keep the two icon buttons, Discord's text/padding and three gaps outside the scrolling tabs.
                 let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x)
-                    + 5.0 * button
-                    + 62.0
+                    + 6.0 * button
+                    + 66.0
                     + window_controls::width(&controls.right);
                 // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
                 let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
@@ -1001,6 +1001,10 @@ mod tab_widths {
 fn library_buttons(app: &mut PdfCraftApp, ui: &mut egui::Ui, button: f32, showing: bool) {
     if icons::button(ui, "book-open", button, showing, "Library").clicked() {
         app.open_library_tab();
+    }
+    let studying = app.library.study.open;
+    if icons::button(ui, "languages", button, studying, "Study (translation, grammar, vocabulary)").clicked() {
+        app.library.study.open = !studying;
     }
     let path = app.active.and_then(|i| app.views.get(i)).and_then(|v| app.session.get(v.id)).and_then(|d| d.path.clone());
     if path.is_some() {

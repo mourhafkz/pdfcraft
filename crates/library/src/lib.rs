@@ -11,6 +11,7 @@
 pub mod ask;
 pub mod chats;
 pub mod cite;
+pub mod deck;
 #[cfg(feature = "fetch")]
 pub mod fetch;
 pub mod ident;
@@ -18,6 +19,7 @@ pub mod lookup;
 pub mod model;
 pub mod search;
 pub mod store;
+pub mod study;
 
 pub use model::{Author, Collection, CollectionId, Metadata, Paper, PaperId, ReadState};
 pub use search::{Filter, SortKey};

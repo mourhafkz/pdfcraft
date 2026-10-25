@@ -118,7 +118,10 @@ mod tests {
         c.turns.push(Turn::user("What is found?"));
         c.turns.push(Turn {
             role: Role::Assistant,
-            segments: vec![Segment { text: "Difficulty rises".into(), citations: vec![Citation { source: Source::Page(10), quote: "q".into() }] }, Segment { text: ".".into(), citations: vec![] }],
+            segments: vec![
+                Segment { text: "Difficulty rises".into(), citations: vec![Citation { source: Source::Page(10), quote: "q".into() }] },
+                Segment { text: ".".into(), citations: vec![] },
+            ],
         });
         save(&d, &mut c).unwrap();
         std::fs::write(d.join("chats").join("broken.json"), "{").unwrap();

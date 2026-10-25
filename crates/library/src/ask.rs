@@ -23,7 +23,9 @@ pub const MODELS: [(&str, &str); 3] = [
 /// The most paper text sent (characters), about 150k tokens; later pages are left out and the
 /// model is told so.
 pub const MAX_CHARS: usize = 600_000;
-const MAX_TOKENS: u32 = 4096;
+/// Room for long answers (a paragraph-by-paragraph study of an article), including any thinking
+/// the model does before it writes.
+const MAX_TOKENS: u32 = 16_000;
 
 const SYSTEM: &str = "You help a researcher read an academic paper. Answer from the paper (the first document) \
 and, when given, the reader's own highlights and notes (the second document). Cite the passages you rely on. \
@@ -188,8 +190,19 @@ pub fn parse_answer(body: &str) -> Result<Turn> {
             .unwrap_or_default();
         segments.push(Segment { text, citations });
     }
+    let stop = root.get("stop_reason").and_then(Value::as_str).unwrap_or("");
     if segments.iter().all(|s| s.text.trim().is_empty()) {
-        return Err(Error::Lookup("Claude sent an empty answer".into()));
+        let why = match stop {
+            "max_tokens" => "the answer ran out of room before any text was written; ask about a smaller part (one section or page), or try again",
+            "refusal" => "Claude declined to answer this question",
+            "" => "Claude sent an empty answer",
+            other => return Err(Error::Lookup(format!("Claude sent an empty answer (stop reason: {other})"))),
+        };
+        return Err(Error::Lookup(why.into()));
+    }
+    if stop == "max_tokens" {
+        segments
+            .push(Segment { text: "\n\n*(The answer reached its length limit here. Ask \"continue\" for the rest.)*".into(), citations: Vec::new() });
     }
     Ok(Turn { role: Role::Assistant, segments })
 }
@@ -263,6 +276,10 @@ mod tests {
         assert_eq!(t.text_with_pages(), "The study finds difficulty rises with level (p. 3), which you flagged.");
         assert!(parse_answer(r#"{"type":"error","error":{"type":"x","message":"bad key"}}"#).unwrap_err().to_string().contains("bad key"));
         assert!(parse_answer(r#"{"content":[]}"#).is_err());
+        let cut = parse_answer(r#"{"content":[{"type":"thinking","thinking":"..."}],"stop_reason":"max_tokens"}"#).unwrap_err().to_string();
+        assert!(cut.contains("ran out of room"), "{cut}");
+        let long = parse_answer(r#"{"content":[{"type":"text","text":"Part one"}],"stop_reason":"max_tokens"}"#).unwrap();
+        assert!(long.text().contains("continue"));
         assert!(parse_answer("nope").is_err());
         assert!(error_message(401, r#"{"error":{"message":"invalid x-api-key"}}"#).contains("invalid x-api-key"));
     }

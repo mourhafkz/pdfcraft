@@ -30,8 +30,8 @@ pub struct AskUi {
     pending: Option<String>,
     /// Each file's page texts, once read.
     pages: HashMap<String, Arc<Vec<String>>>,
-    key: Option<String>,
-    key_loaded: bool,
+    pub(crate) key: Option<String>,
+    pub(crate) key_loaded: bool,
     key_draft: String,
     show_key: bool,
     error: Option<String>,
@@ -54,7 +54,7 @@ fn key_file() -> Option<std::path::PathBuf> {
 }
 
 /// The saved API key: `ANTHROPIC_API_KEY`, else the Keychain (macOS) or the key file.
-fn load_key() -> Option<String> {
+pub(crate) fn load_key() -> Option<String> {
     if let Ok(k) = std::env::var("ANTHROPIC_API_KEY")
         && !k.trim().is_empty()
     {
@@ -683,7 +683,7 @@ fn answer(ui: &mut egui::Ui, t: &Tokens, turn: &Turn, go_to: &mut Option<usize>)
     });
 }
 
-fn key_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
+pub(crate) fn key_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     ui.add_space(6.0);
     egui::Frame::NONE.fill(t.panel).corner_radius(8).inner_margin(10).show(ui, |ui| {
         ui.label(RichText::new("Claude API key").strong());

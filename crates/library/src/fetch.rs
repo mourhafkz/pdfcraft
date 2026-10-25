@@ -83,8 +83,18 @@ fn os_roots() -> Result<ureq::tls::RootCerts> {
 /// Sends the paper's text (and the reader's notes, when included) to Anthropic with the user's
 /// own API key; nothing else.
 pub fn ask(api_key: &str, request: &serde_json::Value) -> Result<crate::ask::Turn> {
+    crate::ask::parse_answer(&messages(api_key, request)?)
+}
+
+/// Study a passage: POST a request built by [`crate::study::request`] and read the sheet.
+pub fn study(api_key: &str, request: &serde_json::Value) -> Result<crate::study::Sheet> {
+    crate::study::parse(&messages(api_key, request)?)
+}
+
+/// POST to the Messages API with the user's key; the answer's body, or a readable error.
+fn messages(api_key: &str, request: &serde_json::Value) -> Result<String> {
     let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(180)))
+        .timeout_global(Some(Duration::from_secs(600)))
         .tls_config(ureq::tls::TlsConfig::builder().root_certs(os_roots()?).build())
         .build()
         .new_agent();
@@ -104,5 +114,5 @@ pub fn ask(api_key: &str, request: &serde_json::Value) -> Result<crate::ask::Tur
     if !(200..300).contains(&status) {
         return Err(Error::Lookup(crate::ask::error_message(status, &text)));
     }
-    crate::ask::parse_answer(&text)
+    Ok(text)
 }

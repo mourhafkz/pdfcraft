@@ -31,11 +31,21 @@ pub struct Settings {
     pub ask_model: String,
     /// Send the reader's highlights and notes along with questions.
     pub ask_include_notes: bool,
+    /// Study: the learner's level and the language translations and explanations are in.
+    pub study_level: String,
+    pub study_language: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { watched: Vec::new(), auto_lookup: true, ask_model: String::new(), ask_include_notes: true }
+        Settings {
+            watched: Vec::new(),
+            auto_lookup: true,
+            ask_model: String::new(),
+            ask_include_notes: true,
+            study_level: "B2–C1".into(),
+            study_language: "English".into(),
+        }
     }
 }
 
