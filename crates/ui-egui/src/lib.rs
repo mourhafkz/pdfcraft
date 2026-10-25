@@ -101,6 +101,10 @@ mod icon_data;
 pub mod icons;
 pub mod last_session;
 pub mod last_view;
+#[cfg(not(target_arch = "wasm32"))]
+mod library_marks;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod library_ui;
 pub mod motion;
 mod page_pointer;
 mod page_selection_ui;
@@ -865,6 +869,9 @@ pub struct PdfCraftApp {
     pub combine_conflicts: combine_ui::ConflictPreview,
     /// The Combine files tab: whether it is open, shown, its selection and undo history.
     pub combine_tab: combine_ui::CombineTab,
+    /// The Library tab (reference manager).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub library: library_ui::LibraryUi,
     /// The Combine files table's column order and widths (kept in the settings).
     pub combine_columns: combine_ui::Columns,
     /// Combine files as thumbnails or as the table (kept in the settings).
@@ -1228,6 +1235,8 @@ impl PdfCraftApp {
             combine_draft: Vec::new(),
             combine_conflicts: Default::default(),
             combine_tab: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            library: Default::default(),
             combine_columns: Default::default(),
             combine_view: Default::default(),
             combine_zoom: 1.0,
@@ -2876,6 +2885,10 @@ impl PdfCraftApp {
 
     /// `true` while any open document still waits for page renders (used by headless capture).
     pub fn render_pending(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.library.working() {
+            return true;
+        }
         self.views.iter().any(|v| v.render_pending())
     }
 
@@ -2901,6 +2914,19 @@ impl PdfCraftApp {
                 };
                 self.set_theme_preference(preference);
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            ("library", _) => {
+                self.open_library_tab();
+                if let Ok(id) = value.parse::<u64>() {
+                    self.library_select(id);
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            ("library_detail", _) => self.library_detail(value),
+            #[cfg(not(target_arch = "wasm32"))]
+            ("library_search", _) => self.library_search(value),
+            #[cfg(not(target_arch = "wasm32"))]
+            ("library_add", _) => self.library_add_paths(value.split(',').map(std::path::PathBuf::from).collect()),
             ("scroll_speed", _) => {
                 self.scroll_speed = scroll_speed::ScrollSpeed::parse(value).ok_or("scroll_speed must be slow, normal, or fast")?;
             }
@@ -3476,6 +3502,8 @@ impl eframe::App for PdfCraftApp {
             self.window_state.keep(storage, minimized);
         }
         storage.set_string("pdfcraft", self.persist());
+        #[cfg(not(target_arch = "wasm32"))]
+        self.library.save_now();
     }
 
     /// Each frame's work before drawing: opens, operating-system and control-channel requests,
@@ -3719,6 +3747,8 @@ impl eframe::App for PdfCraftApp {
             if self.mode == Mode::Read {
                 match self.active {
                     None if self.combine_showing() => combine_ui::page(self, ui),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    None if self.library_showing() => library_ui::page(self, ui),
                     None => home::show(self, ui),
                     Some(index) => match compare_ui::side_by_side(self, index) {
                         Some((old, new)) => compare_ui::compare_area(self, old, new, ui),
@@ -3732,6 +3762,11 @@ impl eframe::App for PdfCraftApp {
             }
         });
         self.process_pending_edits();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.library_frame();
+            library_ui::notes_window(self, &ctx);
+        }
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
         self.show_progress(&ctx);

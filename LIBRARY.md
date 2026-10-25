@@ -1,0 +1,55 @@
+# PdfCraft Library — a Mendeley-style reference manager
+
+This fork adds a **Library** to PdfCraft: your papers with their metadata, collections, tags,
+notes and highlights, in one place, with citation export. Open it with the **book** button next to
+Home in the tab strip.
+
+## What it does
+
+| | |
+|---|---|
+| **Library** | Every PDF you add, as a sortable table (title, authors, year, venue, date added), with *All papers*, *Recently added*, *Favorites*, *Needs review*, *Unfiled* and *Unread / Reading / Read*. |
+| **Metadata** | Read from each PDF when it's added: DOI, arXiv id, ISBN, title, authors and keywords. When the paper has a DOI or arXiv id, the rest is filled from **CrossRef** or **arXiv** (only the identifier is sent; turn it off in the sidebar). Every field stays editable: type, title, authors, year, journal, volume, issue, pages, publisher, DOI, arXiv, ISBN, URL, abstract, keywords, citation key. *Look up* fills empty fields; **Shift**-click it to replace them all. |
+| **Notes** | A notes page per paper (Markdown), saved automatically. While reading a paper, the **sticky-note** button in the tab strip opens its notes in a window beside the PDF. |
+| **Highlights** | Highlight in any colour with PdfCraft's Highlight tool and write a note on a highlight; the paper's **Highlights** tab lists every highlight with its colour, page, the highlighted sentence and your note. Filter by colour, click one to open the PDF at that page, or add them all to your notes as Markdown (grouped by colour). Highlights live in the PDF itself as standard annotations, so other readers (Preview, Acrobat, Zotero) see them too. |
+| **Organise** | Collections (one level of sub-collections; drag papers onto a collection), tags, favourites, reading state, duplicate warning for a DOI that is already in the library. |
+| **Watched folders** | PDFs saved into a watched folder join the library when you open it. |
+| **Search** | One box searches titles, authors, abstracts, keywords, tags, your notes — and the **full text** of every paper, with the matching passage shown under the title. |
+| **Citations** | Copy an APA 7 reference, or export the selection (or everything shown) as **BibTeX** or **RIS** for LaTeX, Word, Zotero or EndNote. |
+
+The library is kept in PdfCraft's settings folder (`~/Library/Application Support/PdfCraft/library/`
+on macOS): `library.json` plus the extracted text in `fulltext/`. Set `PDFCRAFT_LIBRARY_DIR` to keep
+it elsewhere (a synced folder, say). Removing a paper from the library never deletes its PDF.
+
+## Getting the Mac app
+
+Every push to `feat/research-library` builds a universal (Apple silicon + Intel) DMG on GitHub
+Actions: **Actions ▸ macOS build (Library fork) ▸ latest run ▸ Artifacts**. It can also be run
+by hand (**Run workflow**) for a single architecture, which is about twice as fast.
+
+The app is ad-hoc signed (no Apple Developer certificate), so macOS blocks the download at first.
+After dragging PdfCraft.app to Applications, run once in Terminal:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/PdfCraft.app
+```
+
+### Building on your Mac instead
+
+```sh
+xcode-select --install                     # once: Apple's command-line tools
+curl https://sh.rustup.rs -sSf | sh        # once: Rust
+git clone https://github.com/mourhafkz/pdfcraft && cd pdfcraft
+git checkout feat/research-library
+cargo run --release -p pdfcraft            # run it directly, or:
+packaging/macos/package.sh --arch aarch64  # build dist/release/pdfcraft-*.dmg
+```
+
+## Where the code is
+
+- `crates/library` — the reference library: records, storage, identifier detection, CrossRef and
+  arXiv parsing (the HTTPS request is behind the `fetch` feature), BibTeX / RIS / APA, search.
+  No interface code; `cargo test -p pdfcraft-library --features fetch`.
+- `crates/ui-egui/src/library_ui.rs` — the Library tab and the notes window.
+- `crates/ui-egui/src/library_marks.rs` — reading a PDF for the library: identifiers, text, and
+  highlights with the text under them.

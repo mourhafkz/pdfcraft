@@ -413,6 +413,8 @@ pub fn show(app: &mut crate::PdfCraftApp, ui: &mut egui::Ui) {
                 ui.painter().rect_filled(ui.max_rect(), 0.0, t.pasteboard);
                 match app.active {
                     None if app.combine_showing() => crate::combine_ui::page(app, ui),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    None if app.library_showing() => crate::library_ui::page(app, ui),
                     None => crate::home::show(app, ui),
                     Some(index) => match crate::compare_ui::side_by_side(app, index) {
                         Some((old, new)) => crate::compare_ui::compare_area(app, old, new, ui),

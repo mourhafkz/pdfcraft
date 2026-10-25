@@ -1,0 +1,60 @@
+name: macOS build (Library fork)
+
+# Builds PdfCraft with the Library (reference manager) for macOS and attaches the DMG to the
+# run as an artifact: Actions ▸ this workflow ▸ the run ▸ Artifacts.
+#
+# The app is ad-hoc signed (no Apple Developer certificate), so macOS quarantines the download.
+# After copying PdfCraft.app to Applications, run once in Terminal:
+#   xattr -dr com.apple.quarantine /Applications/PdfCraft.app
+
+on:
+  push:
+    branches: [feat/research-library]
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "universal (Apple silicon + Intel), aarch64 (Apple silicon only) or x86_64 (Intel only)"
+        default: universal
+        required: true
+
+concurrency:
+  group: mac-library-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dmg:
+    runs-on: macos-14
+    timeout-minutes: 180
+    env:
+      ARCH: ${{ github.event.inputs.arch || 'universal' }}
+      PDFCRAFT_BUILD_LABEL: library
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          case "$ARCH" in
+            universal) rustup target add aarch64-apple-darwin x86_64-apple-darwin ;;
+            aarch64) rustup target add aarch64-apple-darwin ;;
+            x86_64) rustup target add x86_64-apple-darwin ;;
+          esac
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: mac-library-${{ env.ARCH }}
+
+      - name: Test the library crate
+        run: cargo test -p pdfcraft-library --features fetch
+
+      - name: Build, sign (ad hoc) and package
+        run: packaging/macos/package.sh --arch "$ARCH"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PdfCraft-Library-macos-${{ env.ARCH }}
+          path: dist/release/*.dmg
+          if-no-files-found: error
+          retention-days: 30

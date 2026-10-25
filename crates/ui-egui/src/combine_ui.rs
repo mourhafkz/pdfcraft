@@ -1897,6 +1897,10 @@ impl PdfCraftApp {
     pub fn open_combine_tab(&mut self) {
         self.combine_tab.open = true;
         self.combine_tab.focused = true;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.library.focused = false;
+        }
         self.active = None;
     }
 

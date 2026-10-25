@@ -1,0 +1,28 @@
+[package]
+name = "pdfcraft-library"
+description = "Reference library: paper metadata, collections, tags, notes, identifiers, citations and search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Metadata lookup from CrossRef and arXiv over HTTPS. Off by default: the parsers are always
+# built and tested; only the network request is behind this feature (never on wasm).
+fetch = ["dep:ureq", "dep:rustls-native-certs"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true, features = ["clock"] }
+# arXiv answers in Atom XML; a small, pure-Rust, read-only parser.
+roxmltree = "0.20"
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"], optional = true }
+rustls-native-certs = { version = "0.8", optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

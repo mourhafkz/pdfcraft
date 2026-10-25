@@ -9,6 +9,11 @@ rust-version = "1.95"
 [lints]
 workspace = true
 
+[features]
+default = ["library-fetch"]
+# Library ▸ Look up: metadata from CrossRef and arXiv over HTTPS (only the DOI or arXiv id is sent).
+library-fetch = ["pdfcraft-library/fetch"]
+
 [dependencies]
 craft-ui = { workspace = true }
 # macOS: a window close quits through `terminate:` (the Touch Bar crash, #1136); elsewhere a no-op.
@@ -41,6 +46,8 @@ unicode-bidi = "0.3"
 skrifa = "0.44"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The Library tab (reference manager: metadata, collections, notes, highlights, citations).
+pdfcraft-library = { workspace = true }
 # Control-channel tokens.
 getrandom = "0.4"
 # Create ▸ Clipboard (images; already in the tree through egui-winit).

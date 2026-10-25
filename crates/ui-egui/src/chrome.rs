@@ -62,14 +62,24 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     });
                     ui.add_space(window_controls::SIDE_GAP - 4.0);
                 }
-                if icons::button(ui, "house", button, app.active.is_none() && !app.combine_showing(), tl!("Home")).clicked() {
+                #[cfg(not(target_arch = "wasm32"))]
+                let library_showing = app.library_showing();
+                #[cfg(target_arch = "wasm32")]
+                let library_showing = false;
+                if icons::button(ui, "house", button, app.active.is_none() && !app.combine_showing() && !library_showing, tl!("Home")).clicked() {
                     app.active = None;
                     app.combine_tab.focused = false;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        app.library.focused = false;
+                    }
                 }
+                #[cfg(not(target_arch = "wasm32"))]
+                library_buttons(app, ui, button, library_showing);
                 // Keep the two icon buttons, Discord's text/padding and three gaps outside the scrolling tabs.
                 let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x)
-                    + 2.0 * button
-                    + 50.0
+                    + 4.0 * button
+                    + 58.0
                     + window_controls::width(&controls.right);
                 // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
                 let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
@@ -983,5 +993,27 @@ mod tab_widths {
         assert_eq!(MAC_CONTENT_LEFT - lights_end, margin);
         // `egui::Margin` is in `i8`.
         assert!(MAC_CONTENT_LEFT <= f32::from(i8::MAX));
+    }
+}
+
+/// Library (reference manager) and, over a document, its notes or "Add to library".
+#[cfg(not(target_arch = "wasm32"))]
+fn library_buttons(app: &mut PdfCraftApp, ui: &mut egui::Ui, button: f32, showing: bool) {
+    if icons::button(ui, "book-open", button, showing, "Library").clicked() {
+        app.open_library_tab();
+    }
+    let path = app.active.and_then(|i| app.views.get(i)).and_then(|v| app.session.get(v.id)).and_then(|d| d.path.clone());
+    if let Some(path) = path {
+        if app.library.paper_for(&path).is_some() {
+            let on = app.library.notes_window;
+            if icons::button(ui, "sticky-note", button, on, "Paper notes").clicked() {
+                app.library.notes_window = !on;
+            }
+        } else if icons::button(ui, "bookmark-plus", button, false, "Add to library").clicked() {
+            app.library_add_paths(vec![std::path::PathBuf::from(path)]);
+        }
+    } else {
+        // Keep the strip's layout steady.
+        ui.add_space(button + ui.spacing().item_spacing.x);
     }
 }

@@ -4196,6 +4196,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-library"
+version = "0.13.0"
+dependencies = [
+ "chrono",
+ "proptest",
+ "roxmltree",
+ "rustls-native-certs",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "ureq",
+]
+
+[[package]]
 name = "pdfcraft-measure"
 version = "0.13.0"
 dependencies = [
@@ -4389,6 +4403,7 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-engine",
  "pdfcraft-fonts",
+ "pdfcraft-library",
  "pdfcraft-model",
  "pdfcraft-platform",
  "pdfcraft-render",
