@@ -210,7 +210,7 @@ impl Deck {
         let mut out = String::from("#separator:tab\n#html:true\n#columns:Front\tBack\tTags\n");
         for c in &self.cards {
             let w = &c.word;
-            let mut back = format!("<b>{}</b>", clean(&w.meaning));
+            let mut back = format!("<b>{}</b>", clean(&w.meanings()));
             if !w.forms.trim().is_empty() {
                 back.push_str(&format!("<br>{}", clean(&w.forms)));
             }
@@ -233,7 +233,14 @@ mod tests {
     }
 
     fn word(w: &str) -> Word {
-        Word { word: w.into(), kind: "noun".into(), forms: "pl. -n".into(), meaning: "meaning\nline2".into(), from_text: "a\tb".into() }
+        Word {
+            word: w.into(),
+            kind: "noun".into(),
+            forms: "pl. -n".into(),
+            meaning: "meaning\nline2".into(),
+            meaning_ar: String::new(),
+            from_text: "a\tb".into(),
+        }
     }
 
     #[test]

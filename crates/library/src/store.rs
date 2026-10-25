@@ -34,6 +34,8 @@ pub struct Settings {
     /// Study: the learner's level and the language translations and explanations are in.
     pub study_level: String,
     pub study_language: String,
+    /// The Claude model for Study (empty: the default).
+    pub study_model: String,
 }
 
 impl Default for Settings {
@@ -45,6 +47,7 @@ impl Default for Settings {
             ask_include_notes: true,
             study_level: "B2–C1".into(),
             study_language: "English".into(),
+            study_model: String::new(),
         }
     }
 }

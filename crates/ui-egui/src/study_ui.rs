@@ -107,7 +107,7 @@ impl PdfCraftApp {
         let Some(key) = self.library.ask.key.clone() else { return };
         self.library.ensure_loaded();
         let settings = self.library.lib.as_ref().map(|l| l.settings.clone()).unwrap_or_default();
-        let model = if settings.ask_model.is_empty() { ask::DEFAULT_MODEL.to_owned() } else { settings.ask_model.clone() };
+        let model = if settings.study_model.is_empty() { ask::DEFAULT_MODEL.to_owned() } else { settings.study_model.clone() };
         let (_, cut) = study::clip(&passage);
         let label = match page {
             Some(p) => format!("{source}, p. {}", p + 1),
@@ -224,22 +224,40 @@ fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 app.library.study.tab = tab;
             }
         }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if let Some(lib) = app.library.lib.as_mut() {
-                let mut level = lib.settings.study_level.clone();
-                egui::ComboBox::from_id_salt("study_level").selected_text(format!("Level {level}")).width(110.0).show_ui(ui, |ui| {
-                    for l in ["A2–B1", "B1–B2", "B2–C1", "C1+"] {
-                        ui.selectable_value(&mut level, l.to_owned(), l);
-                    }
-                });
-                if level != lib.settings.study_level {
-                    lib.settings.study_level = level;
-                    lib.mark_changed();
-                    let _ = lib.save();
-                }
-            }
-        });
     });
+    // Level, language and model, kept with the library's settings.
+    if let Some(lib) = app.library.lib.as_mut() {
+        let before = (lib.settings.study_level.clone(), lib.settings.study_language.clone(), lib.settings.study_model.clone());
+        ui.horizontal_wrapped(|ui| {
+            let st = &mut lib.settings;
+            egui::ComboBox::from_id_salt("study_level").selected_text(format!("Level {}", st.study_level)).width(100.0).show_ui(ui, |ui| {
+                for l in ["A2–B1", "B1–B2", "B2–C1", "C1+"] {
+                    ui.selectable_value(&mut st.study_level, l.to_owned(), l);
+                }
+            });
+            let lang = study::Lang::parse(&st.study_language);
+            egui::ComboBox::from_id_salt("study_language").selected_text(lang.name()).width(130.0).show_ui(ui, |ui| {
+                for l in study::Lang::ALL {
+                    if ui.selectable_label(lang == l, l.name()).clicked() {
+                        l.name().clone_into(&mut st.study_language);
+                    }
+                }
+            });
+            let model = if st.study_model.is_empty() { ask::DEFAULT_MODEL.to_owned() } else { st.study_model.clone() };
+            let label = ask::MODELS.iter().find(|m| m.0 == model).map(|m| m.1).unwrap_or(model.as_str()).to_owned();
+            egui::ComboBox::from_id_salt("study_model").selected_text(label).width(170.0).show_ui(ui, |ui| {
+                for (id, label) in ask::MODELS {
+                    if ui.selectable_label(model == id, label).clicked() {
+                        id.clone_into(&mut st.study_model);
+                    }
+                }
+            });
+        });
+        if before != (lib.settings.study_level.clone(), lib.settings.study_language.clone(), lib.settings.study_model.clone()) {
+            lib.mark_changed();
+            let _ = lib.save();
+        }
+    }
     ui.separator();
     match app.library.study.tab {
         Tab::Study => study_tab(app, ui, t),
@@ -362,7 +380,9 @@ fn study_tab(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         heading(ui, t, "Translation");
         for p in &studied.sheet.translation {
             ui.label(RichText::new(p.de.trim()).font(theme::regular(13.0)).color(t.text));
-            ui.label(RichText::new(p.en.trim()).font(theme::regular(12.5)).color(t.text_muted).italics());
+            for tr in p.translations() {
+                text(ui, tr, theme::regular(12.5), t.text_muted);
+            }
             ui.add_space(5.0);
         }
 
@@ -375,11 +395,16 @@ fn study_tab(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                     if !g.in_text.trim().is_empty() {
                         ui.label(RichText::new(format!("„{}“", g.in_text.trim())).font(theme::regular(12.5)).color(t.accent).italics());
                     }
-                    ui.label(RichText::new(g.explanation.trim()).font(theme::regular(12.5)).color(t.text));
+                    for ex in [g.explanation.trim(), g.explanation_ar.trim()].into_iter().filter(|x| !x.is_empty()) {
+                        text(ui, ex, theme::regular(12.5), t.text);
+                        ui.add_space(2.0);
+                    }
                     for e in &g.examples {
                         ui.add_space(3.0);
                         ui.label(RichText::new(format!("• {}", e.de.trim())).font(theme::regular(12.5)).color(t.text));
-                        ui.label(RichText::new(format!("   {}", e.en.trim())).font(theme::regular(12.0)).color(t.text_muted).italics());
+                        for tr in e.translations() {
+                            text(ui, tr, theme::regular(12.0), t.text_muted);
+                        }
                     }
                 });
                 ui.add_space(6.0);
@@ -412,7 +437,9 @@ fn study_tab(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                                     ui.label(RichText::new(w.forms.trim()).font(theme::regular(11.5)).color(t.text_faint));
                                 }
                             });
-                            ui.label(RichText::new(w.meaning.trim()).font(theme::regular(12.5)).color(t.text_muted));
+                            for m in [w.meaning.trim(), w.meaning_ar.trim()].into_iter().filter(|x| !x.is_empty()) {
+                                text(ui, m, theme::regular(12.5), t.text_muted);
+                            }
                             if !w.from_text.trim().is_empty() {
                                 ui.label(RichText::new(format!("„{}“", w.from_text.trim())).font(theme::regular(11.5)).color(t.text_faint).italics());
                             }
@@ -485,6 +512,12 @@ fn file_name(source: &str, page: Option<usize>) -> String {
     }
 }
 
+/// Wrapped text that may be Arabic: right-to-left paragraphs are laid out right to left and
+/// sit against the right edge (the app's comment renderer).
+fn text(ui: &mut egui::Ui, s: &str, font: egui::FontId, color: Color32) {
+    crate::widgets::wrapped_text(ui, s.trim(), font, color, false);
+}
+
 fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     ui.add_space(8.0);
     ui.label(RichText::new(text.to_uppercase()).font(theme::semibold(11.0)).color(t.text_faint));
@@ -540,14 +573,14 @@ fn vocabulary_tab(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let cards = app.library.study.deck.as_ref().map(|d| d.cards.clone()).unwrap_or_default();
     egui::ScrollArea::vertical().id_salt("study_deck").auto_shrink([false, false]).show(ui, |ui| {
         for c in cards.iter().rev() {
-            if !q.is_empty() && !pdfcraft_library::search::fold(&format!("{} {}", c.word.word, c.word.meaning)).contains(&q) {
+            if !q.is_empty() && !pdfcraft_library::search::fold(&format!("{} {}", c.word.word, c.word.meanings())).contains(&q) {
                 continue;
             }
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.set_max_width(ui.available_width() - 110.0);
                     ui.label(RichText::new(c.word.word.trim()).font(theme::semibold(13.0)));
-                    ui.label(RichText::new(c.word.meaning.trim()).font(theme::regular(12.0)).color(t.text_muted));
+                    text(ui, &c.word.meanings(), theme::regular(12.0), t.text_muted);
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if icons::button(ui, "trash-2", 20.0, false, "Remove from the deck").clicked() {
@@ -609,7 +642,9 @@ fn review(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             ui.label(RichText::new(card.word.word.trim()).font(theme::semibold(24.0)).color(t.text));
             if shown {
                 ui.add_space(12.0);
-                ui.label(RichText::new(card.word.meaning.trim()).font(theme::regular(16.0)).color(t.text));
+                for m in [card.word.meaning.trim(), card.word.meaning_ar.trim()].into_iter().filter(|x| !x.is_empty()) {
+                    ui.label(RichText::new(crate::bidi::visual_auto(m)).font(theme::regular(16.0)).color(t.text));
+                }
                 if !card.word.forms.trim().is_empty() {
                     ui.label(RichText::new(card.word.forms.trim()).font(theme::regular(13.0)).color(t.text_muted));
                 }

@@ -42,6 +42,12 @@ jobs:
           esac
           rustc --version
 
+      # Embeds the Arabic, CJK, Thai and Georgian interface faces (Study in Arabic needs them).
+      - name: Fonts
+        run: |
+          git clone --depth 1 https://github.com/storytold/craft-fonts "$RUNNER_TEMP/craft-fonts"
+          echo "CRAFT_FONTS_DIR=$RUNNER_TEMP/craft-fonts" >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: mac-library-${{ env.ARCH }}
