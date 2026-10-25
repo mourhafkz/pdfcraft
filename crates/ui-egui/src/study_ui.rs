@@ -291,6 +291,7 @@ fn study_tab(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if app.library.study.sheets.is_empty() {
         return;
     }
+    let mut save: Option<(String, String)> = None;
     // Earlier passages of this session.
     if app.library.study.sheets.len() > 1 {
         let labels: Vec<String> = app
@@ -310,6 +311,24 @@ fn study_tab(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 }
             });
     }
+    let n = app.library.study.sheets.len();
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(format!("{n} passage{} studied this session", if n == 1 { "" } else { "s" }))
+                .font(theme::regular(11.5))
+                .color(t.text_faint),
+        );
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui
+                .small_button(format!("Export all ({n})…"))
+                .on_hover_text("Every passage studied this session, in page order, in one Markdown file")
+                .clicked()
+            {
+                let first = app.library.study.sheets.last().map(|s| s.source.clone()).unwrap_or_default();
+                save = Some((all_markdown(&app.library.study.sheets), format!("{} – study notes.md", safe_name(&first))));
+            }
+        });
+    });
     ui.add_space(4.0);
     let Some(studied) = app.library.study.sheets.get(app.library.study.showing).cloned() else { return };
     let in_deck: Vec<bool> = {
@@ -328,8 +347,11 @@ fn study_tab(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 go_to = studied.page;
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.small_button("Copy as Markdown").clicked() {
-                    ui.ctx().copy_text(format!("> {}\n\n{}", studied.passage, studied.sheet.to_markdown()));
+                if ui.small_button("Save…").on_hover_text("Save this sheet as a Markdown file").clicked() {
+                    save = Some((sheet_markdown(&studied), file_name(&studied.source, studied.page)));
+                }
+                if ui.small_button("Copy").on_hover_text("Copy this sheet as Markdown").clicked() {
+                    ui.ctx().copy_text(sheet_markdown(&studied));
                 }
             });
         });
@@ -418,10 +440,48 @@ fn study_tab(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             app.notify(format!("Added {added} words to the deck"));
         }
     }
+    if let Some((text, name)) = save {
+        let dialog = rfd::AsyncFileDialog::new().set_file_name(name).add_filter("Markdown", &["md"]);
+        app.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, path| match std::fs::write(&path, text) {
+            Ok(()) => app.notify(format!("Saved {}", path.display())),
+            Err(e) => app.notify(format!("Couldn't save: {e}")),
+        });
+    }
     if let Some(p) = go_to
         && let Some(view) = app.active.and_then(|i| app.views.get_mut(i))
     {
         view.go_to_page(p);
+    }
+}
+
+/// One studied passage as Markdown: where it is, the passage, then the sheet.
+fn sheet_markdown(s: &Studied) -> String {
+    let place = match s.page {
+        Some(p) => format!("{}, p. {}", s.source, p + 1),
+        None => s.source.clone(),
+    };
+    format!("# {place}\n\n> {}\n\n{}", s.passage.trim(), s.sheet.to_markdown())
+}
+
+/// Every passage of the session in reading order (document, then page; studied order within a
+/// page), as one Markdown document.
+fn all_markdown(sheets: &[Studied]) -> String {
+    let mut ordered: Vec<(usize, &Studied)> = sheets.iter().rev().enumerate().collect();
+    ordered.sort_by(|(i, a), (j, b)| a.source.cmp(&b.source).then(a.page.cmp(&b.page)).then(i.cmp(j)));
+    ordered.iter().map(|(_, s)| sheet_markdown(s)).collect::<Vec<_>>().join("\n\n---\n\n")
+}
+
+/// A file-name-safe version of `s` (letters, digits, spaces, dashes; at most 60 characters).
+fn safe_name(s: &str) -> String {
+    let n: String = s.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { ' ' }).take(60).collect();
+    let n = n.split_whitespace().collect::<Vec<_>>().join(" ");
+    if n.is_empty() { "Study".into() } else { n }
+}
+
+fn file_name(source: &str, page: Option<usize>) -> String {
+    match page {
+        Some(p) => format!("{} p{} – study.md", safe_name(source), p + 1),
+        None => format!("{} – study.md", safe_name(source)),
     }
 }
 
@@ -619,5 +679,27 @@ fn review(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 r.queue.push(id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn studied(page: usize, passage: &str) -> Studied {
+        Studied { passage: passage.into(), source: "Mag".into(), page: Some(page), cut: false, sheet: Sheet::default() }
+    }
+
+    #[test]
+    fn export_all_is_in_page_order() {
+        // Newest first, as the session keeps them.
+        let sheets = vec![studied(3, "drei"), studied(1, "eins b"), studied(1, "eins a")];
+        let md = all_markdown(&sheets);
+        let pos = |x: &str| md.find(x).unwrap();
+        assert!(pos("eins a") < pos("eins b") && pos("eins b") < pos("drei"));
+        assert!(md.starts_with("# Mag, p. 2\n\n> eins a"));
+        assert_eq!(md.matches("\n---\n").count(), 2);
+        assert_eq!(safe_name("Deutsch_perfekt/eMagazine:2"), "Deutsch perfekt eMagazine 2");
+        assert_eq!(file_name("", Some(0)), "Study p1 – study.md");
     }
 }
