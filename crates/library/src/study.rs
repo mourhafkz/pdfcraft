@@ -13,7 +13,7 @@ use crate::{Error, Result};
 /// The longest passage studied at once (characters); longer selections are cut, and the
 /// interface says so.
 pub const MAX_PASSAGE: usize = 12_000;
-const MAX_TOKENS: u32 = 12_000;
+const MAX_TOKENS: u32 = 16_000;
 const TOOL: &str = "study_sheet";
 
 /// A sentence and its translation.
@@ -100,7 +100,7 @@ Funktionsverbgefüge, modal particles, subordinate clause types, word formation,
 write two or three new example sentences in everyday contexts with translations. Choose vocabulary at {level} level \
 and above, including idioms and colloquial or youth-language expressions; give nouns with article and plural, verbs \
 with Präteritum, Perfekt and the case or preposition they take, and note the register when it matters. Always answer \
-by calling the study_sheet tool."
+by calling the study_sheet tool exactly once (if you cannot call it, reply with only the same JSON object)."
     )
 }
 
@@ -145,7 +145,9 @@ pub fn request(model: &str, passage: &str, level: &str, language: &str, source: 
         "max_tokens": MAX_TOKENS,
         "system": system(level, language),
         "tools": [{"name": TOOL, "description": "Return the study sheet for the passage.", "input_schema": schema()}],
-        "tool_choice": {"type": "tool", "name": TOOL},
+        // "auto", not a forced tool: models that think before answering refuse a forced tool
+        // choice. The system prompt asks for the tool; a JSON reply in text is accepted too.
+        "tool_choice": {"type": "auto"},
         "messages": [{"role": "user", "content": format!("Passage (from {source}):\n\n{passage}")}]
     })
 }
@@ -156,16 +158,24 @@ pub fn parse(body: &str) -> Result<Sheet> {
     if let Some(err) = root.get("error") {
         return Err(Error::Lookup(format!("Claude: {}", err.get("message").and_then(Value::as_str).unwrap_or("unknown error"))));
     }
-    let input = root
-        .get("content")
-        .and_then(Value::as_array)
-        .and_then(|c| c.iter().find(|b| b.get("type").and_then(Value::as_str) == Some("tool_use")))
-        .and_then(|b| b.get("input"))
-        .ok_or_else(|| match root.get("stop_reason").and_then(Value::as_str) {
-            Some("max_tokens") => Error::Lookup("the passage was too long to study at once; select a shorter part".into()),
-            _ => Error::Lookup("Claude sent no study sheet".into()),
-        })?;
-    let sheet: Sheet = serde_json::from_value(input.clone()).map_err(|e| Error::Lookup(format!("the study sheet was malformed ({e})")))?;
+    let blocks = root.get("content").and_then(Value::as_array).cloned().unwrap_or_default();
+    let from_tool = blocks.iter().find(|b| b.get("type").and_then(Value::as_str) == Some("tool_use")).and_then(|b| b.get("input")).cloned();
+    // Without the tool, the sheet may come as a JSON object in the text (possibly fenced).
+    let from_text = || {
+        let text: String = blocks
+            .iter()
+            .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .collect();
+        let start = text.find('{')?;
+        let end = text.rfind('}')?;
+        serde_json::from_str::<Value>(text.get(start..=end)?).ok()
+    };
+    let input = from_tool.or_else(from_text).ok_or_else(|| match root.get("stop_reason").and_then(Value::as_str) {
+        Some("max_tokens") => Error::Lookup("the passage was too long to study at once; select a shorter part".into()),
+        _ => Error::Lookup("Claude sent no study sheet".into()),
+    })?;
+    let sheet: Sheet = serde_json::from_value(input).map_err(|e| Error::Lookup(format!("the study sheet was malformed ({e})")))?;
     if sheet.translation.is_empty() && sheet.grammar.is_empty() && sheet.vocabulary.is_empty() {
         return Err(Error::Lookup("Claude sent an empty study sheet".into()));
     }
@@ -179,7 +189,8 @@ mod tests {
     #[test]
     fn request_forces_the_tool() {
         let r = request("m", "  Er sagt, er habe keine Zeit.  ", "B2–C1", "English", "Deutsch perfekt, p. 12");
-        assert_eq!(r["tool_choice"]["name"], TOOL);
+        assert_eq!(r["tool_choice"]["type"], "auto");
+        assert_eq!(r["tools"][0]["name"], TOOL);
         assert_eq!(r["tools"][0]["input_schema"]["required"][0], "translation");
         assert!(r["system"].as_str().unwrap().contains("B2–C1"));
         assert_eq!(r["messages"][0]["content"], "Passage (from Deutsch perfekt, p. 12):\n\nEr sagt, er habe keine Zeit.");
@@ -206,6 +217,8 @@ mod tests {
         let md = s.to_markdown();
         assert!(md.contains("### Konjunktiv I\n\n*In the text:* „er habe“"));
         assert!(md.contains("| die Zeugenaussage | die Zeugenaussagen | witness statement |"));
+        let text_reply = r#"{"content":[{"type":"text","text":"```json\n{\"translation\":[{\"de\":\"Hallo\",\"en\":\"Hello\"}],\"grammar\":[],\"vocabulary\":[]}\n```"}]}"#;
+        assert_eq!(parse(text_reply).unwrap().translation[0].en, "Hello");
         assert!(parse(r#"{"content":[],"stop_reason":"max_tokens"}"#).unwrap_err().to_string().contains("too long"));
         assert!(parse(r#"{"content":[{"type":"tool_use","input":{}}]}"#).is_err());
         assert!(parse(r#"{"error":{"message":"overloaded"}}"#).unwrap_err().to_string().contains("overloaded"));
