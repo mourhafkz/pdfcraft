@@ -68,15 +68,59 @@ pub fn scan(bytes: Arc<Vec<u8>>, with_text: bool) -> Result<Scanned, String> {
         }
     }
     let first_two: String = text.split('\u{c}').take(2).collect::<Vec<_>>().join("\u{c}");
-    let found = ident::scan(&first_two, info.title.as_deref());
+    let lines = page_text(0).map(|t| layout_lines(&t)).unwrap_or_default();
+    let found = ident::scan_layout(&first_two, &lines, info.title.as_deref());
     let marks = marks(&info, &mut page_text);
+    // Info /Author is often a word processor's account name ("anonymous", "admin", "jsmith"):
+    // keep it only when every name in it appears on the first pages.
+    let folded = pdfcraft_library::search::fold(&first_two);
+    let info_author = info.author.clone().filter(|a| {
+        let names = pdfcraft_library::model::Author::parse_list(a);
+        !names.is_empty() && names.iter().all(|n| !n.family.is_empty() && folded.contains(&pdfcraft_library::search::fold(&n.family)))
+    });
     Ok(Scanned {
         found,
-        info_author: info.author.clone(),
+        info_author,
         info_keywords: info.keywords.clone(),
         text: if with_text { text } else { String::new() },
         marks,
     })
+}
+
+/// A page's lines in reading order, each with its typical glyph height (its type size).
+pub fn layout_lines(t: &PageText) -> Vec<ident::Line> {
+    let mut lines: Vec<(String, Vec<f32>)> = Vec::new();
+    let mut current: Option<u32> = None;
+    for (i, g) in t.glyphs.iter().enumerate() {
+        let line = t.line_of.get(i).copied().unwrap_or(0);
+        if current != Some(line) || lines.is_empty() {
+            lines.push((String::new(), Vec::new()));
+            current = Some(line);
+        } else if t.space_before.get(i).copied().unwrap_or(false)
+            && let Some(last) = lines.last_mut()
+        {
+            last.0.push(' ');
+        }
+        if let Some(last) = lines.last_mut() {
+            last.0.push_str(&g.text);
+            let h = g.rect[3] - g.rect[1];
+            if h.is_finite() && h > 0.0 && !g.text.trim().is_empty() {
+                last.1.push(h);
+            }
+        }
+        if lines.len() > 200 {
+            break;
+        }
+    }
+    lines
+        .into_iter()
+        .filter(|(text, _)| !text.trim().is_empty())
+        .map(|(text, mut sizes)| {
+            sizes.sort_by(f32::total_cmp);
+            let size = sizes.get(sizes.len() / 2).copied().unwrap_or(0.0);
+            ident::Line { text: text.trim().to_owned(), size }
+        })
+        .collect()
 }
 
 /// The listed comments of a document in page order, each with the text under it and the notes

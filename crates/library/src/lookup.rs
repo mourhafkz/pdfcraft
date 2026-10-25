@@ -40,7 +40,56 @@ fn encode_path(s: &str) -> String {
 /// A CrossRef `/works/{doi}` answer.
 pub fn parse_crossref(body: &str) -> Result<Metadata> {
     let root: Value = serde_json::from_str(body).map_err(|e| Error::Lookup(format!("CrossRef answered with something unreadable ({e})")))?;
-    let m = root.get("message").unwrap_or(&root);
+    Ok(crossref_work(root.get("message").unwrap_or(&root)))
+}
+
+/// The CrossRef search URL for a title (and optionally the first author's surname).
+pub fn crossref_search_url(title: &str, author: &str) -> String {
+    let q = format!("{} {}", title.trim(), author.trim());
+    format!("https://api.crossref.org/works?rows=5&query.bibliographic={}", encode_query(q.trim()))
+}
+
+/// Percent-encode a query value (everything but unreserved characters).
+fn encode_query(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// How alike two titles are: the share of their distinct words they have in common (0..1),
+/// ignoring case, punctuation and accents' absence.
+pub fn title_similarity(a: &str, b: &str) -> f64 {
+    let words = |s: &str| -> std::collections::BTreeSet<String> {
+        crate::search::fold(s).split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() > 1).map(str::to_owned).collect()
+    };
+    let (x, y) = (words(a), words(b));
+    let union = x.union(&y).count();
+    if union == 0 {
+        return 0.0;
+    }
+    x.intersection(&y).count() as f64 / union as f64
+}
+
+/// The best match for `title` in a CrossRef search answer, when one is close enough to trust
+/// (most of the words the same); otherwise an error saying nothing matched.
+pub fn parse_crossref_search(body: &str, title: &str) -> Result<Metadata> {
+    let root: Value = serde_json::from_str(body).map_err(|e| Error::Lookup(format!("CrossRef answered with something unreadable ({e})")))?;
+    let items = root.get("message").and_then(|m| m.get("items")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let best = items.iter().map(crossref_work).map(|m| (title_similarity(title, &m.title), m)).max_by(|a, b| a.0.total_cmp(&b.0));
+    match best {
+        Some((score, m)) if score >= 0.8 => Ok(m),
+        _ => Err(Error::Lookup("CrossRef has no record that matches this title closely".into())),
+    }
+}
+
+/// One CrossRef work record.
+fn crossref_work(m: &Value) -> Metadata {
     let first = |key: &str| -> String {
         match m.get(key) {
             Some(Value::Array(a)) => a.iter().find_map(Value::as_str).map(clean).unwrap_or_default(),
@@ -72,7 +121,7 @@ pub fn parse_crossref(body: &str) -> Result<Metadata> {
     cap(&mut abstract_text, MAX_ABSTRACT);
     let keywords =
         m.get("subject").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(clean).take(50).collect()).unwrap_or_default();
-    Ok(Metadata {
+    Metadata {
         kind: crossref_kind(&text("type")).to_owned(),
         title: first("title"),
         authors,
@@ -88,7 +137,7 @@ pub fn parse_crossref(body: &str) -> Result<Metadata> {
         abstract_text,
         keywords,
         ..Default::default()
-    })
+    }
 }
 
 /// CrossRef work types → BibTeX entry types.
@@ -245,6 +294,19 @@ mod tests {
         assert_eq!(m.abstract_text, "The dominant sequence transduction models...");
         assert!(parse_arxiv("<feed xmlns=\"http://www.w3.org/2005/Atom\"></feed>").is_err());
         assert!(parse_arxiv("<feed").is_err());
+    }
+
+    #[test]
+    fn crossref_search_accepts_only_close_titles() {
+        let body = r#"{"message":{"items":[
+            {"title":["Something else entirely"],"DOI":"10.1/a"},
+            {"title":["Die Vorhersage der Schwierigkeit deutscher C-Test-Texte: Untersuchungen am Beispiel des onDaF"],"DOI":"10.1/b","issued":{"date-parts":[[2016]]}}]}}"#;
+        let m = parse_crossref_search(body, "Die Vorhersage der Schwierigkeit deutscher C-Test-Texte. Untersuchungen am Beispiel des onDaF").unwrap();
+        assert_eq!((m.doi.as_str(), m.year), ("10.1/b", Some(2016)));
+        assert!(parse_crossref_search(body, "A completely different paper about judo").is_err());
+        assert!(parse_crossref_search(r#"{"message":{"items":[]}}"#, "x").is_err());
+        assert!(crossref_search_url("C-Tests & IRT", "Kaufmann").ends_with("query.bibliographic=C-Tests%20%26%20IRT%20Kaufmann"));
+        assert_eq!(title_similarity("", ""), 0.0);
     }
 
     #[test]

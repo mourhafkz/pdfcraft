@@ -247,9 +247,214 @@ fn title_like(line: &str) -> bool {
         && line.chars().filter(|c| c.is_alphabetic()).count() * 2 > line.chars().count()
 }
 
+/// Words that mark a journal masthead or running header rather than a paper's title.
+fn journalish(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    const MARKS: [&str; 22] = [
+        "zeitschrift",
+        "journal",
+        "proceedings",
+        "issn",
+        "jahrgang",
+        "volume",
+        "vol.",
+        "heft",
+        "nummer",
+        "quarterly",
+        "review of",
+        "transactions",
+        "annals",
+        "bulletin",
+        "studies in",
+        "revue",
+        "rivista",
+        "revista",
+        "© ",
+        "copyright",
+        "licensed",
+        "published by",
+    ];
+    MARKS.iter().any(|m| lower.contains(m))
+}
+
+/// A line of the first page with the height of its text (points), as laid out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Line {
+    pub text: String,
+    pub size: f32,
+}
+
+/// What the top of a first page says about where a paper appeared.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Header {
+    pub venue: Option<String>,
+    pub year: Option<i32>,
+    pub volume: Option<String>,
+    pub issue: Option<String>,
+}
+
+/// The first number after any of `words` in `lower` (e.g. "jahrgang 21" → "21").
+fn number_after(lower: &str, words: &[&str]) -> Option<String> {
+    for w in words {
+        let mut from = 0;
+        while let Some(off) = lower.get(from..).and_then(|s| s.find(w)) {
+            let start = from + off + w.len();
+            from = start;
+            // Only a whole word: "nr" must not match inside "number".
+            let before_ok = lower.get(..from - w.len()).and_then(|s| s.chars().next_back()).is_none_or(|c| !c.is_alphanumeric());
+            let rest = lower.get(start..).unwrap_or("");
+            let digits: String = rest.trim_start_matches([' ', '.', ':', '\u{a0}']).chars().take_while(char::is_ascii_digit).collect();
+            if before_ok && !digits.is_empty() && digits.len() <= 5 {
+                return Some(digits);
+            }
+        }
+    }
+    None
+}
+
+/// A plausible publication year (1800 up to next year) in `s`, as a whole number.
+fn find_year(s: &str) -> Option<i32> {
+    let max = chrono::Utc::now().format("%Y").to_string().parse::<i32>().unwrap_or(2100).saturating_add(1);
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars.get(i).is_some_and(char::is_ascii_digit) {
+            let start = i;
+            while chars.get(i).is_some_and(char::is_ascii_digit) {
+                i += 1;
+            }
+            if i - start == 4
+                && let Ok(y) = chars.get(start..i).unwrap_or(&[]).iter().collect::<String>().parse::<i32>()
+                && (1800..=max).contains(&y)
+            {
+                return Some(y);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+/// Read the masthead lines above the title: the journal's name, year, volume and issue.
+pub fn header(lines: &[&str]) -> Header {
+    let mut h = Header::default();
+    for line in lines {
+        let lower = line.to_lowercase();
+        if h.venue.is_none() && journalish(line) && !lower.starts_with("issn") && !lower.contains("http") {
+            // "Journal of X, Vol. 3, No. 2 (2016)" → "Journal of X".
+            let name = line.split([',', '(']).next().unwrap_or(line).trim();
+            let words = name.split_whitespace().count();
+            if (2..=14).contains(&words) && !name.chars().any(|c| c.is_ascii_digit()) {
+                h.venue = Some(name.to_owned());
+            }
+        }
+        if h.year.is_none() {
+            h.year = find_year(line);
+        }
+        if h.volume.is_none() {
+            h.volume = number_after(&lower, &["jahrgang", "volume", "vol.", "vol", "band", "bd."]);
+        }
+        if h.issue.is_none() {
+            h.issue = number_after(&lower, &["nummer", "issue", "number", "no.", "nr.", "heft"]);
+        }
+    }
+    h
+}
+
+/// The title from the first page's layout: the largest text near the top that reads like a
+/// heading and isn't the journal's masthead, with the lines that continue it at the same size.
+/// Returns the title and the index of its last line.
+pub fn title_by_size(lines: &[Line]) -> Option<(String, usize)> {
+    let top: Vec<&Line> = lines.iter().take(45).collect();
+    let (start, best) = top
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| title_like(&l.text) && !journalish(&l.text) && l.size.is_finite())
+        .max_by(|a, b| a.1.size.total_cmp(&b.1.size).then(b.0.cmp(&a.0)))?;
+    let mut title = best.text.trim().to_owned();
+    let mut last = start;
+    for (k, next) in top.iter().enumerate().skip(start + 1).take(3) {
+        let same = (next.size - best.size).abs() <= best.size * 0.08;
+        if !same || next.text.split_whitespace().count() == 0 || journalish(&next.text) {
+            break;
+        }
+        if title.ends_with('-') {
+            title.pop();
+        } else {
+            title.push(' ');
+        }
+        title.push_str(next.text.trim());
+        last = k;
+    }
+    Some((title, last))
+}
+
+/// Authors from the lines after the title: the first of the next three that reads as names.
+pub fn authors_after(lines: &[Line], title_end: usize) -> Vec<crate::model::Author> {
+    for line in lines.iter().skip(title_end + 1).take(3) {
+        let found = authors_in(&line.text);
+        if !found.is_empty() {
+            return found;
+        }
+    }
+    Vec::new()
+}
+
+/// One line read as a list of names, or nothing when it doesn't look like one.
+fn authors_in(line: &str) -> Vec<crate::model::Author> {
+    let line = line.trim();
+    let lower = line.to_lowercase();
+    if line.chars().count() > 300
+        || line.contains('@')
+        || ["university", "universität", "institut", "department", "abstract"].iter().any(|w| lower.contains(w))
+    {
+        return Vec::new();
+    }
+    let cleaned: String = line.chars().filter(|c| !c.is_ascii_digit() && !matches!(c, '*' | '†' | '‡' | '§' | '¹' | '²' | '³')).collect();
+    let parts: Vec<&str> = cleaned
+        .split([',', ';', '&'])
+        .flat_map(|p| p.split(" and "))
+        .flat_map(|p| p.split(" und "))
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect();
+    let name_like = |p: &&str| {
+        let words: Vec<&str> = p.split_whitespace().collect();
+        (2..=4).contains(&words.len())
+            && words.iter().all(|w| {
+                w.chars().next().is_some_and(char::is_uppercase) || matches!(*w, "van" | "von" | "de" | "der" | "da" | "di" | "al" | "el" | "bin")
+            })
+    };
+    if parts.is_empty() || parts.len() > 30 || !parts.iter().all(name_like) {
+        return Vec::new();
+    }
+    parts.into_iter().filter_map(crate::model::Author::parse).collect()
+}
+
+/// [`scan`] with the first page's layout: the title by type size, the authors under it, and the
+/// journal, year, volume and issue from the masthead above it.
+pub fn scan_layout(first_pages: &str, lines: &[Line], info_title: Option<&str>) -> Found {
+    let mut found = scan(first_pages, info_title);
+    if let Some((title, end)) = title_by_size(lines) {
+        let start = lines.iter().position(|l| title.starts_with(l.text.trim())).unwrap_or(end);
+        let above: Vec<&str> = lines.iter().take(start).map(|l| l.text.as_str()).collect();
+        found.header = header(&above);
+        if info_title.is_none_or(|t| !plausible_info_title(t)) {
+            found.title = Some(title);
+            let by_layout = authors_after(lines, end);
+            if !by_layout.is_empty() {
+                found.authors = by_layout;
+            }
+        }
+    }
+    found
+}
+
 /// Identifiers and a title guess found in a paper's text.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Found {
+    pub header: Header,
     pub authors: Vec<crate::model::Author>,
     pub doi: Option<String>,
     pub arxiv: Option<String>,
@@ -263,6 +468,7 @@ pub fn scan(first_pages: &str, info_title: Option<&str>) -> Found {
     let first_page = first_pages.split('\u{c}').next().unwrap_or(first_pages);
     let title = info_title.filter(|t| plausible_info_title(t)).map(|t| t.trim().to_owned()).or_else(|| guess_title(first_page));
     Found {
+        header: Header::default(),
         authors: title.as_deref().map(|t| guess_authors(first_page, t)).unwrap_or_default(),
         doi: find_doi(first_pages),
         arxiv: find_arxiv(first_pages),
@@ -322,10 +528,41 @@ mod tests {
         assert_eq!(found.arxiv.as_deref(), Some("2101.00001"));
     }
 
+    #[test]
+    fn layout_skips_the_masthead() {
+        let l = |t: &str, size: f32| Line { text: t.into(), size };
+        let page = vec![
+            l("Zeitschrift für Interkulturellen Fremdsprachenunterricht", 18.0),
+            l("Didaktik und Methodik im Bereich Deutsch als Fremdsprache", 10.0),
+            l("ISSN 1205-6545 Jahrgang 21, Nummer 2 (Oktober 2016)", 9.0),
+            l("Die Vorhersage der Schwierigkeit deutscher C-Test-Texte: Untersuchungen", 14.0),
+            l("am Beispiel des onDaF", 14.0),
+            l("Nicole Kaufmann", 11.0),
+            l("TestDaF-Institut", 9.0),
+        ];
+        let text = page.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+        let f = scan_layout(&text, &page, None);
+        assert_eq!(f.title.as_deref(), Some("Die Vorhersage der Schwierigkeit deutscher C-Test-Texte: Untersuchungen am Beispiel des onDaF"));
+        assert_eq!(f.authors, vec![crate::model::Author::new("Nicole", "Kaufmann")]);
+        assert_eq!(f.header.venue.as_deref(), Some("Zeitschrift für Interkulturellen Fremdsprachenunterricht"));
+        assert_eq!(f.header.year, Some(2016));
+        assert_eq!(f.header.volume.as_deref(), Some("21"));
+        assert_eq!(f.header.issue.as_deref(), Some("2"));
+        let h = header(&["Journal of Testing, Vol. 12, No. 3 (2019), pp. 1-20"]);
+        assert_eq!(
+            (h.venue.as_deref(), h.year, h.volume.as_deref(), h.issue.as_deref()),
+            (Some("Journal of Testing"), Some(2019), Some("12"), Some("3"))
+        );
+        assert_eq!(authors_in("Grace Hopper¹, Alan Turing² und Ada von Lovelace").len(), 3);
+        assert!(scan_layout("", &[], None).title.is_none());
+    }
+
     proptest! {
         #[test]
         fn never_panics(s in "\\PC{0,300}") {
             let _ = scan(&s, Some(&s));
+            let lines: Vec<Line> = s.lines().map(|t| Line { text: t.into(), size: t.len() as f32 }).collect();
+            let _ = scan_layout(&s, &lines, None);
         }
 
         #[test]

@@ -277,10 +277,12 @@ impl PdfCraftApp {
                 log::warn!("library: couldn't keep the text of {path}: {e}");
             }
             let lookup = match &result {
-                Ok(s) if auto_lookup && (s.found.doi.is_some() || s.found.arxiv.is_some()) => {
+                Ok(s) if auto_lookup && (s.found.doi.is_some() || s.found.arxiv.is_some() || s.found.title.is_some()) => {
                     let probe = Metadata {
                         doi: s.found.doi.clone().unwrap_or_default(),
                         arxiv: s.found.arxiv.clone().unwrap_or_default(),
+                        title: s.found.title.clone().unwrap_or_default(),
+                        authors: s.found.authors.clone(),
                         ..Default::default()
                     };
                     Some(lookup(&probe))
@@ -397,6 +399,10 @@ impl PdfCraftApp {
                             doi: s.found.doi.clone().unwrap_or_default(),
                             arxiv: s.found.arxiv.clone().unwrap_or_default(),
                             isbn: s.found.isbn.clone().unwrap_or_default(),
+                            venue: s.found.header.venue.clone().unwrap_or_default(),
+                            year: s.found.header.year,
+                            volume: s.found.header.volume.clone().unwrap_or_default(),
+                            issue: s.found.header.issue.clone().unwrap_or_default(),
                             ..Default::default()
                         };
                         if let Some(a) = s.info_author.as_deref().filter(|a| !a.trim().is_empty()) {
@@ -954,6 +960,7 @@ fn paper_list(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                     for (label, action) in [
                         ("Open", ContextAction::Open),
                         ("Look up details online", ContextAction::Lookup),
+                        ("Re-read details from the PDF", ContextAction::Reread),
                         ("Copy citation (APA)", ContextAction::CopyApa),
                         ("Copy BibTeX", ContextAction::CopyBib),
                         ("Show in folder", ContextAction::Reveal),
@@ -1016,6 +1023,7 @@ struct RowData {
 enum ContextAction {
     Open,
     Lookup,
+    Reread,
     CopyApa,
     CopyBib,
     Reveal,
@@ -1026,6 +1034,16 @@ fn context_action(app: &mut PdfCraftApp, ui: &egui::Ui, id: PaperId, action: Con
     match action {
         ContextAction::Open => app.library_open_paper(id, None),
         ContextAction::Lookup => app.library_lookup(id, false),
+        ContextAction::Reread => {
+            // Start over from the file (and the online record): replaces the details, keeps
+            // notes, tags, collections and reading state.
+            if let Some(p) = app.library.lib.as_mut().and_then(|l| l.get_mut(id)) {
+                p.meta = Metadata::default();
+                p.lookup_tried = false;
+            }
+            app.library.drafts.paper = None;
+            app.library_import(id);
+        }
         ContextAction::CopyApa | ContextAction::CopyBib => {
             if let Some(p) = app.library.lib.as_ref().and_then(|l| l.get(id)) {
                 let text = if matches!(action, ContextAction::CopyApa) { cite::apa(p) } else { cite::bibtex(&[p]) };
@@ -1176,12 +1194,12 @@ fn details(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             app.library_open_paper(id, None);
         }
         let busy = app.library.busy.contains(&id);
-        let can_lookup = !paper.meta.doi.trim().is_empty() || !paper.meta.arxiv.trim().is_empty();
+        let can_lookup = !paper.meta.doi.trim().is_empty() || !paper.meta.arxiv.trim().is_empty() || paper.meta.title.split_whitespace().count() >= 3;
         let label = if busy { "Working…" } else { "Look up" };
         if ui
             .add_enabled(!busy && can_lookup, egui::Button::new(RichText::new(label).font(theme::regular(12.5))))
-            .on_hover_text("Fill empty fields from CrossRef (DOI) or arXiv. Shift-click to replace every field.")
-            .on_disabled_hover_text("Add a DOI or arXiv id first")
+            .on_hover_text("Fill empty fields from CrossRef (by DOI, or by searching the title) or arXiv. Shift-click to replace every field.")
+            .on_disabled_hover_text("Add a title, DOI or arXiv id first")
             .clicked()
         {
             let overwrite = ui.input(|i| i.modifiers.shift);

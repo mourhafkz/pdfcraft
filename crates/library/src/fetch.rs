@@ -24,7 +24,7 @@ pub fn arxiv(id: &str) -> Result<Metadata> {
 }
 
 /// Look up whichever identifier `meta` has: the DOI first (journal versions carry the venue),
-/// then the arXiv id. Its answer fills only the fields still empty unless `overwrite`.
+/// then the arXiv id, then a CrossRef search by title (accepted only on a close match).
 pub fn lookup(meta: &Metadata) -> Result<Metadata> {
     if !meta.doi.trim().is_empty() {
         match crossref(&meta.doi) {
@@ -36,7 +36,12 @@ pub fn lookup(meta: &Metadata) -> Result<Metadata> {
     if !meta.arxiv.trim().is_empty() {
         return arxiv(&meta.arxiv);
     }
-    Err(Error::Lookup("this paper has no DOI or arXiv id to look up".into()))
+    if meta.title.split_whitespace().count() >= 3 {
+        let author = meta.authors.first().map(|a| a.family.as_str()).unwrap_or("");
+        let body = get(&lookup::crossref_search_url(&meta.title, author), "application/json")?;
+        return lookup::parse_crossref_search(&body, &meta.title);
+    }
+    Err(Error::Lookup("this paper has no DOI, arXiv id or title to look up".into()))
 }
 
 fn get(url: &str, accept: &str) -> Result<String> {
