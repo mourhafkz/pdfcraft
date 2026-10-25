@@ -14,7 +14,7 @@ on:
     inputs:
       arch:
         description: "universal (Apple silicon + Intel), aarch64 (Apple silicon only) or x86_64 (Intel only)"
-        default: universal
+        default: aarch64
         required: true
 
 concurrency:
@@ -26,7 +26,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 180
     env:
-      ARCH: ${{ github.event.inputs.arch || 'universal' }}
+      ARCH: ${{ github.event.inputs.arch || 'aarch64' }}
       PDFCRAFT_BUILD_LABEL: library
     steps:
       - uses: actions/checkout@v4

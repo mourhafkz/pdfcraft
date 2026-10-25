@@ -37,7 +37,8 @@ pub enum DetailTab {
 }
 
 /// Work done off the interface thread.
-enum Job {
+pub(crate) enum Job {
+    Asked(crate::ask_ui::Answer),
     Imported { id: PaperId, result: Result<Box<library_marks::Scanned>, String>, lookup: Option<Result<Metadata, String>> },
     Looked { id: PaperId, result: Result<Metadata, String>, overwrite: bool },
     Marks { id: PaperId, result: Result<Vec<Mark>, String> },
@@ -60,7 +61,7 @@ pub struct LibraryUi {
     pub open: bool,
     /// The tab is the one showing (with no document tab active).
     pub focused: bool,
-    lib: Option<Library>,
+    pub(crate) lib: Option<Library>,
     load_error: Option<String>,
     filter: Filter,
     sort: SortKey,
@@ -68,11 +69,11 @@ pub struct LibraryUi {
     selected: Vec<PaperId>,
     detail: DetailTab,
     drafts: Drafts,
-    tx: Sender<Job>,
+    pub(crate) tx: Sender<Job>,
     rx: Receiver<Job>,
     /// Papers being read or looked up.
     busy: HashSet<PaperId>,
-    marks: HashMap<PaperId, Vec<Mark>>,
+    pub(crate) marks: HashMap<PaperId, Vec<Mark>>,
     marks_loading: HashSet<PaperId>,
     /// Show only highlights of this colour.
     color_filter: Option<String>,
@@ -89,6 +90,8 @@ pub struct LibraryUi {
     /// The floating notes window beside a document that is in the library.
     pub notes_window: bool,
     watch_scanned: bool,
+    /// The Ask this paper window.
+    pub ask: crate::ask_ui::AskUi,
 }
 
 impl Default for LibraryUi {
@@ -122,6 +125,7 @@ impl Default for LibraryUi {
             pending_jump: None,
             notes_window: false,
             watch_scanned: false,
+            ask: Default::default(),
         }
     }
 }
@@ -137,6 +141,11 @@ fn library_dir() -> PathBuf {
         .or_else(|| eframe::storage_dir("PdfCraft"))
         .unwrap_or_else(|| std::env::temp_dir().join("PdfCraft"))
         .join("library")
+}
+
+/// Run `f` on a worker thread (Ask uses it too).
+pub(crate) fn spawn_worker(f: impl FnOnce() + Send + 'static) {
+    spawn(f);
 }
 
 fn spawn(f: impl FnOnce() + Send + 'static) {
@@ -173,6 +182,19 @@ impl LibraryUi {
     /// Whether papers are still being read, looked up or searched (screenshots wait for it).
     pub fn working(&self) -> bool {
         !self.busy.is_empty() || !self.marks_loading.is_empty() || self.query_changed.is_some()
+    }
+
+    /// The library's settings changed: save them soon.
+    pub(crate) fn mark_settings_changed(&mut self) {
+        if let Some(lib) = self.lib.as_mut() {
+            lib.mark_changed();
+        }
+        self.last_edit = Some(Instant::now());
+    }
+
+    /// A paper's notes were edited outside the Library tab.
+    pub(crate) fn note_edited(&mut self, id: PaperId) {
+        self.edited(id);
     }
 
     /// Write pending changes (also called when the app saves its state and on exit).
@@ -387,6 +409,13 @@ impl PdfCraftApp {
     }
 
     fn library_apply(&mut self, job: Job) {
+        let job = match job {
+            Job::Asked(answer) => {
+                self.ask_answered(answer);
+                return;
+            }
+            other => other,
+        };
         let Some(lib) = self.library.lib.as_mut() else { return };
         match job {
             Job::Imported { id, result, lookup } => {
@@ -470,6 +499,7 @@ impl PdfCraftApp {
                     }
                 }
             }
+            Job::Asked(_) => {}
             Job::Hits { generation, hits } => {
                 if generation == self.library.fulltext_generation {
                     self.library.fulltext_hits = hits;

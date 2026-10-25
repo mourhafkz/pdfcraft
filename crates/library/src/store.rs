@@ -27,11 +27,15 @@ pub struct Settings {
     pub watched: Vec<String>,
     /// Look new papers up on CrossRef/arXiv when they have a DOI or arXiv id.
     pub auto_lookup: bool,
+    /// The Claude model for Ask (empty: the default).
+    pub ask_model: String,
+    /// Send the reader's highlights and notes along with questions.
+    pub ask_include_notes: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { watched: Vec::new(), auto_lookup: true }
+        Settings { watched: Vec::new(), auto_lookup: true, ask_model: String::new(), ask_include_notes: true }
     }
 }
 
@@ -110,6 +114,11 @@ impl Library {
     /// Whether there are changes not yet saved.
     pub fn is_dirty(&self) -> bool {
         self.dirty
+    }
+
+    /// Mark the library changed without a paper (its settings, say).
+    pub fn mark_changed(&mut self) {
+        self.dirty = true;
     }
 
     /// Mark the library changed (callers that edit through [`Library::get_mut`] call this).

@@ -8,6 +8,7 @@
 //! read from disk or the network is untrusted: parsing is lenient, sizes are capped, and nothing
 //! here panics.
 
+pub mod ask;
 pub mod cite;
 #[cfg(feature = "fetch")]
 pub mod fetch;

@@ -78,3 +78,31 @@ fn os_roots() -> Result<ureq::tls::RootCerts> {
     }
     Ok(ureq::tls::RootCerts::new_with_certs(&certs))
 }
+
+/// Ask Claude: POST a Messages API request built by [`crate::ask::request`] and parse the answer.
+/// Sends the paper's text (and the reader's notes, when included) to Anthropic with the user's
+/// own API key; nothing else.
+pub fn ask(api_key: &str, request: &serde_json::Value) -> Result<crate::ask::Turn> {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(180)))
+        .tls_config(ureq::tls::TlsConfig::builder().root_certs(os_roots()?).build())
+        .build()
+        .new_agent();
+    let body = serde_json::to_string(request).map_err(|e| Error::Lookup(e.to_string()))?;
+    let mut response = agent
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", api_key.trim())
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .send(body.as_str())
+        .map_err(|e| Error::Lookup(format!("couldn't reach Claude ({e})")))?;
+    let status = response.status().as_u16();
+    let text = response.body_mut().with_config().limit(MAX_BODY).read_to_string().map_err(|e| Error::Lookup(format!("unreadable answer ({e})")))?;
+    if !(200..300).contains(&status) {
+        return Err(Error::Lookup(crate::ask::error_message(status, &text)));
+    }
+    crate::ask::parse_answer(&text)
+}

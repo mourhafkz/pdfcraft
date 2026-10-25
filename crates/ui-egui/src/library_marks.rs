@@ -78,13 +78,23 @@ pub fn scan(bytes: Arc<Vec<u8>>, with_text: bool) -> Result<Scanned, String> {
         let names = pdfcraft_library::model::Author::parse_list(a);
         !names.is_empty() && names.iter().all(|n| !n.family.is_empty() && folded.contains(&pdfcraft_library::search::fold(&n.family)))
     });
-    Ok(Scanned {
-        found,
-        info_author,
-        info_keywords: info.keywords.clone(),
-        text: if with_text { text } else { String::new() },
-        marks,
-    })
+    Ok(Scanned { found, info_author, info_keywords: info.keywords.clone(), text: if with_text { text } else { String::new() }, marks })
+}
+
+/// Every page's text, for asking questions about the paper (at most 1000 pages).
+pub fn page_texts(bytes: Arc<Vec<u8>>) -> Result<Vec<String>, String> {
+    let info = pdfcraft_render::inspect(bytes.clone(), None).map_err(|e| e.to_string())?;
+    let mut renderer = PageRenderer::new(bytes, RenderConfig::default());
+    let n = info.pages.len().min(1000);
+    Ok((0..n)
+        .map(|page| {
+            renderer
+                .render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() })
+                .text
+                .map(|t| t.plain_text())
+                .unwrap_or_default()
+        })
+        .collect())
 }
 
 /// A page's lines in reading order, each with its typical glyph height (its type size).

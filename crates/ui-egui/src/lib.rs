@@ -87,6 +87,8 @@ mod dialogs;
 mod edit_text_ui;
 pub mod field_table_ui;
 pub use edit_text_ui::CropMode;
+#[cfg(not(target_arch = "wasm32"))]
+mod ask_ui;
 mod editing;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod file_watch;
@@ -2926,6 +2928,8 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             ("library_search", _) => self.library_search(value),
             #[cfg(not(target_arch = "wasm32"))]
+            ("ask", _) => self.library.ask.open = value != "closed",
+            #[cfg(not(target_arch = "wasm32"))]
             ("library_add", _) => self.library_add_paths(value.split(',').map(std::path::PathBuf::from).collect()),
             ("scroll_speed", _) => {
                 self.scroll_speed = scroll_speed::ScrollSpeed::parse(value).ok_or("scroll_speed must be slow, normal, or fast")?;
@@ -3766,6 +3770,7 @@ impl eframe::App for PdfCraftApp {
         {
             self.library_frame();
             library_ui::notes_window(self, &ctx);
+            ask_ui::window(self, &ctx);
         }
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);

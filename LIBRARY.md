@@ -15,6 +15,7 @@ Home in the tab strip.
 | **Organise** | Collections (one level of sub-collections; drag papers onto a collection), tags, favourites, reading state, duplicate warning for a DOI that is already in the library. |
 | **Watched folders** | PDFs saved into a watched folder join the library when you open it. |
 | **Search** | One box searches titles, authors, abstracts, keywords, tags, your notes — and the **full text** of every paper, with the matching passage shown under the title. |
+| **Ask this paper** | The **sparkles** button over any open PDF opens a chat with Claude about that paper. Answers come from the paper's text and cite the pages they rely on (click a page chip to go there; hover it for the quoted passage). For a paper in the Library, your highlights, their comments and your notes can be sent along ("go through my highlights…"). Save any answer to the paper's notes. Uses your own Anthropic API key (kept in the macOS Keychain, or `ANTHROPIC_API_KEY`); the paper's text is sent to Anthropic only when you ask. Choose Sonnet, Opus or Haiku in the window. |
 | **Citations** | Copy an APA 7 reference, or export the selection (or everything shown) as **BibTeX** or **RIS** for LaTeX, Word, Zotero or EndNote. |
 
 The library is kept in PdfCraft's settings folder (`~/Library/Application Support/PdfCraft/library/`
@@ -23,9 +24,9 @@ it elsewhere (a synced folder, say). Removing a paper from the library never del
 
 ## Getting the Mac app
 
-Every push to `feat/research-library` builds a universal (Apple silicon + Intel) DMG on GitHub
+Every push to `feat/research-library` builds an Apple-silicon DMG on GitHub
 Actions: **Actions ▸ macOS build (Library fork) ▸ latest run ▸ Artifacts**. It can also be run
-by hand (**Run workflow**) for a single architecture, which is about twice as fast.
+by hand (**Run workflow**) with `universal` or `x86_64` for Intel Macs.
 
 The app is ad-hoc signed (no Apple Developer certificate), so macOS blocks the download at first.
 After dragging PdfCraft.app to Applications, run once in Terminal:
